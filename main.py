@@ -30,7 +30,6 @@ TASK_LOGS = []
 
 def execute_autonomous_task(task_desc: str):
     TASK_LOGS.append(f"Started: {task_desc}")
-    # Autonomous task execution placeholder
     TASK_LOGS.append(f"Completed: {task_desc}")
 
 def pcm_to_wav(pcm_data):
@@ -71,7 +70,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         background_tasks.add_task(execute_autonomous_task, req.message)
         return JSONResponse({
             "type": "text",
-            "content": "🚀 Task register ho chuka hai! Internet band hone par bhi Maya background me kaam jari rakhegi.",
+            "content": "🚀 आपका टास्क रजिस्टर हो गया है! आप इंटरनेट बंद कर सकते हैं, मैं बैकग्राउंड में यह काम पूरा कर दूँगी।",
             "audio": None
         })
 
@@ -84,20 +83,30 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p)}?width=1024&height=1024&nologo=true"
         return JSONResponse({"type": "image", "content": url, "audio": None})
 
-    # High-Intelligence chat route
-    reply = "Sorry, system busy."
+    # High-Intelligence chat route (Female Personality)
+    system_prompt = (
+        "You are Maya, an intelligent, polite, and caring female AI assistant. "
+        "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi', 'samajh gayi'). "
+        "Always address the user respectfully as 'aap' (never ever use 'tu' or 'tera'). "
+        "Keep your responses concise, smart, and friendly."
+    )
+
+    reply = "माफ़ कीजिए, मैं अभी प्रोसेस नहीं कर पा रही हूँ।"
     try:
         if groq_client:
             comp = groq_client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are Maya, an autonomous AI operating system. Reply naturally in Hinglish."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": msg}
                 ],
                 model="openai/gpt-oss-120b"
             )
             reply = comp.choices[0].message.content
         elif gemini_client:
-            res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=msg)
+            res = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"{system_prompt}\nUser: {msg}"
+            )
             reply = res.text
     except Exception as e:
         reply = f"Error: {str(e)}"
@@ -140,7 +149,7 @@ def home():
             <div class="badge">● Live 24/7 (Always Warm)</div>
         </header>
         <div id="chat">
-            <div class="msg maya">नमस्ते! Maya 24/7 ऑटोनॉमस इंजन अब एक्टिव है। आप यहाँ मुझसे बात कर सकते हैं, कोई फोटो बनवा सकते हैं (जैसे: 'car ki image'), या ऑटोनॉमस टास्क दे सकते हैं।</div>
+            <div class="msg maya">नमस्ते! मैं माया हूँ। मैं आपकी क्या मदद कर सकती हूँ? आप मुझसे बात कर सकते हैं, कोई फोटो बनवा सकते हैं, या कोई काम सौंप सकते हैं।</div>
         </div>
         <div id="bar">
             <input id="txt" placeholder="Maya ko koi bhi command dein..." onkeydown="if(event.key==='Enter') send()">
