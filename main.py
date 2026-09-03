@@ -37,7 +37,7 @@ class ChatReq(BaseModel):
 async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
     msg = req.message.strip().lower()
 
-    # Background task detection
+    # Autonomous Background Tasks Detection
     if any(k in msg for k in ["upload", "schedule", "agent banao", "automate"]):
         background_tasks.add_task(execute_autonomous_task, req.message)
         return JSONResponse({
@@ -45,7 +45,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             "content": "🚀 आपका टास्क रजिस्टर हो गया है! आप इंटरनेट बंद कर सकते हैं, मैं बैकग्राउंड में यह काम पूरा कर दूँगी।"
         })
 
-    # Image generation route (Direct Pollinations Flux)
+    # Image Generation Route (Locked: Pollinations Flux)
     if any(k in msg for k in ["image", "photo", "tasveer", "picture"]):
         clean_prompt = msg
         for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do", "dikhaye", "ak"]:
@@ -57,19 +57,19 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&nologo=true&model=flux"
         return JSONResponse({"type": "image", "content": url})
 
-    # Female System Prompt
+    # Locked Personality: Polite, Feminine Hinglish
     system_prompt = (
         "You are Maya, an intelligent, polite, and caring female AI assistant. "
         "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi', 'samajh gayi'). "
-        "Always address the user respectfully as 'aap' (never use 'tu' or 'tera'). "
+        "Always address the user respectfully as 'aap' (never ever use 'tu' or 'tera'). "
         "Keep your responses concise, smart, and friendly."
     )
 
-    reply = "माफ़ कीजिए, मैं अभी प्रोसेस नहीं कर पा रही हूँ।"
-    
-    # 1. First Priority: Groq Llama 3.1 Instant (Ultra-Fast 0.2s)
-    try:
-        if groq_client:
+    reply = None
+
+    # 1. Primary Engine: Groq llama-3.1-8b-instant (Ultra-Fast 0.2s)
+    if groq_client:
+        try:
             comp = groq_client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -78,23 +78,23 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
                 model="llama-3.1-8b-instant"
             )
             reply = comp.choices[0].message.content
-        elif gemini_client:
+        except Exception:
+            reply = None
+
+    # 2. Fallback Engine: Gemini gemini-3.6-flash (If Groq fails or unavailable)
+    if not reply and gemini_client:
+        try:
             res = gemini_client.models.generate_content(
                 model="gemini-3.6-flash",
                 contents=f"{system_prompt}\nUser: {msg}"
             )
             reply = res.text
-    except Exception:
-        # 2. Backup: Gemini 3.6 Flash
-        try:
-            if gemini_client:
-                res = gemini_client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=f"{system_prompt}\nUser: {msg}"
-                )
-                reply = res.text
-        except Exception as e:
-            reply = f"Error: {str(e)}"
+        except Exception:
+            reply = None
+
+    # 3. Safe Fail-Safe Response
+    if not reply:
+        reply = "माफ़ कीजिए, सर्वर पर इस समय ट्रैफ़िक अधिक है। मैं कुछ ही पलों में वापस तैयार हूँ, कृपया दोबारा पूछें।"
 
     return JSONResponse({"type": "text", "content": reply})
 
