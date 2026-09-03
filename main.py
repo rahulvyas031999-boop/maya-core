@@ -74,7 +74,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": msg}
                 ],
-                model="llama-3.3-70b-versatile"
+                model="llama3-8b-8192"
             )
             reply = comp.choices[0].message.content
         elif gemini_client:
