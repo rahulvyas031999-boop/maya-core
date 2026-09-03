@@ -42,11 +42,10 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         background_tasks.add_task(execute_autonomous_task, req.message)
         return JSONResponse({
             "type": "text",
-            "content": "🚀 आपका टास्क रजिस्टर हो गया है! आप इंटरनेट बंद कर सकते हैं, मैं बैकग्राउंड में यह काम पूरा कर दूँगी।",
-            "audio": None
+            "content": "🚀 आपका टास्क रजिस्टर हो गया है! आप इंटरनेट बंद कर सकते हैं, मैं बैकग्राउंड में यह काम पूरा कर दूँगी।"
         })
 
-    # Image generation route (Fast Flux)
+    # Image generation route
     if any(k in msg for k in ["image", "photo", "tasveer", "picture"]):
         clean_prompt = msg
         for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do", "dikhaye", "ak"]:
@@ -56,9 +55,9 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         encoded_prompt = urllib.parse.quote(clean_prompt)
         seed = random.randint(1000, 999999)
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&nologo=true&model=flux"
-        return JSONResponse({"type": "image", "content": url, "audio": None})
+        return JSONResponse({"type": "image", "content": url})
 
-    # Ultra-Fast High-Intelligence Chat
+    # Female System Prompt
     system_prompt = (
         "You are Maya, an intelligent, polite, and caring female AI assistant. "
         "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi'). "
@@ -66,27 +65,28 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         "Keep your responses concise, smart, and friendly."
     )
 
+    # Chat Engine (Primary: Gemini 2.5 Flash, Backup: Groq Llama 3.1)
     reply = "माफ़ कीजिए, मैं अभी प्रोसेस नहीं कर पा रही हूँ।"
     try:
-        if groq_client:
-            comp = groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": msg}
-                ],
-                model="llama3-8b-8192"
-            )
-            reply = comp.choices[0].message.content
-        elif gemini_client:
+        if gemini_client:
             res = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=f"{system_prompt}\nUser: {msg}"
             )
             reply = res.text
+        elif groq_client:
+            comp = groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": msg}
+                ],
+                model="llama-3.1-8b-instant"
+            )
+            reply = comp.choices[0].message.content
     except Exception as e:
         reply = f"Error: {str(e)}"
 
-    return JSONResponse({"type": "text", "content": reply, "audio": None})
+    return JSONResponse({"type": "text", "content": reply})
 
 @app.get("/api/tasks")
 def get_tasks():
@@ -140,7 +140,7 @@ def home():
                 inp.value = '';
                 
                 append('user', v);
-                const loadDiv = append('maya', '⏳ Processing...');
+                const loadDiv = append('maya', '⏳ Maya is typing...');
 
                 try {
                     const res = await fetch('/api/chat', {
