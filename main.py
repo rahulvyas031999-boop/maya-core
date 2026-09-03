@@ -1,9 +1,5 @@
 import os
-import io
-import wave
-import time
 import random
-import base64
 import urllib.parse
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,32 +30,6 @@ def execute_autonomous_task(task_desc: str):
     TASK_LOGS.append(f"Started: {task_desc}")
     TASK_LOGS.append(f"Completed: {task_desc}")
 
-def pcm_to_wav(pcm_data):
-    wav_io = io.BytesIO()
-    with wave.open(wav_io, 'wb') as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(24000)
-        wav_file.writeframes(pcm_data)
-    wav_io.seek(0)
-    return wav_io.read()
-
-def generate_voice_b64(text):
-    try:
-        if not gemini_client:
-            return None
-        res = gemini_client.models.generate_content(
-            model="gemini-2.5-flash-preview-tts",
-            contents=text.replace("*", "")[:200],
-            config=dict(response_modalities=["AUDIO"])
-        )
-        for part in res.candidates[0].content.parts:
-            if getattr(part, 'inline_data', None):
-                return base64.b64encode(pcm_to_wav(part.inline_data.data)).decode('utf-8')
-    except Exception:
-        pass
-    return None
-
 class ChatReq(BaseModel):
     message: str
 
@@ -76,7 +46,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             "audio": None
         })
 
-    # Image generation route (Fixed URL & Cache-busting)
+    # Image generation route (Fast Flux)
     if any(k in msg for k in ["image", "photo", "tasveer", "picture"]):
         clean_prompt = msg
         for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do", "dikhaye", "ak"]:
@@ -86,13 +56,12 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         encoded_prompt = urllib.parse.quote(clean_prompt)
         seed = random.randint(1000, 999999)
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&nologo=true&model=flux"
-        
         return JSONResponse({"type": "image", "content": url, "audio": None})
 
-    # High-Intelligence chat route (Female Personality)
+    # Ultra-Fast High-Intelligence Chat
     system_prompt = (
         "You are Maya, an intelligent, polite, and caring female AI assistant. "
-        "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi', 'samajh gayi'). "
+        "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi'). "
         "Always address the user respectfully as 'aap' (never ever use 'tu' or 'tera'). "
         "Keep your responses concise, smart, and friendly."
     )
@@ -105,7 +74,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": msg}
                 ],
-                model="openai/gpt-oss-120b"
+                model="llama-3.3-70b-versatile"
             )
             reply = comp.choices[0].message.content
         elif gemini_client:
@@ -117,7 +86,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
     except Exception as e:
         reply = f"Error: {str(e)}"
 
-    return JSONResponse({"type": "text", "content": reply, "audio": generate_voice_b64(reply)})
+    return JSONResponse({"type": "text", "content": reply, "audio": None})
 
 @app.get("/api/tasks")
 def get_tasks():
@@ -156,13 +125,12 @@ def home():
             <div class="badge">● Live 24/7 (Always Warm)</div>
         </header>
         <div id="chat">
-            <div class="msg maya">नमस्ते! मैं माया हूँ। मैं आपकी क्या मदद कर सकती हूँ? आप मुझसे बात कर सकते हैं, कोई फोटो बनवा सकते हैं, या कोई काम सौंप सकते हैं।</div>
+            <div class="msg maya">नमस्ते! मैं माया हूँ। मैं आपकी क्या मदद कर सकती हूँ?</div>
         </div>
         <div id="bar">
             <input id="txt" placeholder="Maya ko koi bhi command dein..." onkeydown="if(event.key==='Enter') send()">
             <button onclick="send()">Send</button>
         </div>
-        <audio id="snd" autoplay></audio>
 
         <script>
             async function send() {
@@ -172,7 +140,7 @@ def home():
                 inp.value = '';
                 
                 append('user', v);
-                const loadDiv = append('maya', '⏳ Processing command...');
+                const loadDiv = append('maya', '⏳ Processing...');
 
                 try {
                     const res = await fetch('/api/chat', {
@@ -187,10 +155,9 @@ def home():
                         appendImg(data.content);
                     } else {
                         append('maya', data.content);
-                        if(data.audio) document.getElementById('snd').src = 'data:audio/wav;base64,' + data.audio;
                     }
                 } catch(e) {
-                    loadDiv.innerText = '⚠️ सर्वर कनेक्ट होने में समय ले रहा है, कृपया दोबारा प्रयास करें।';
+                    loadDiv.innerText = '⚠️ एरर, कृपया दोबारा प्रयास करें।';
                 }
             }
 
@@ -208,7 +175,7 @@ def home():
                 const c = document.getElementById('chat');
                 const d = document.createElement('div');
                 d.className = 'msg maya img-container';
-                d.innerHTML = `<div>✨ आपकी इमेज तैयार हो रही है...</div><img src="${url}" class="img-card" onload="this.previousElementSibling.innerText='✨ आपकी इमेज:'" onerror="this.parentElement.innerHTML='⚠️ इमेज लोड नहीं हो सकी, दोबारा कोशिश करें।'"/>`;
+                d.innerHTML = `<div>✨ आपकी इमेज तैयार हो रही है...</div><img src="${url}" class="img-card" onload="this.previousElementSibling.innerText='✨ आपकी इमेज:'" onerror="this.parentElement.innerHTML='⚠️ इमेज लोड नहीं हो सकी।'"/>`;
                 c.appendChild(d);
                 c.scrollTop = c.scrollHeight;
             }
