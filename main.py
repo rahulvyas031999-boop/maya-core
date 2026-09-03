@@ -1,7 +1,4 @@
 import os
-import io
-import wave
-import base64
 import urllib.parse
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,33 +40,6 @@ def execute_autonomous_task(task_desc: str):
     TASK_LOGS.append(f"Started: {task_desc}")
     TASK_LOGS.append(f"Completed: {task_desc}")
 
-def pcm_to_wav(pcm_data):
-    wav_io = io.BytesIO()
-    with wave.open(wav_io, 'wb') as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(24000)
-        wav_file.writeframes(pcm_data)
-    wav_io.seek(0)
-    return wav_io.read()
-
-def generate_voice_b64(text: str):
-    if not gemini_client:
-        return None
-    try:
-        clean = text.replace("*", "").replace("#", "")[:150]
-        res = gemini_client.models.generate_content(
-            model="gemini-2.5-flash-preview-tts",
-            contents=clean,
-            config=dict(response_modalities=["AUDIO"])
-        )
-        for part in res.candidates[0].content.parts:
-            if getattr(part, 'inline_data', None):
-                return base64.b64encode(pcm_to_wav(part.inline_data.data)).decode('utf-8')
-    except Exception:
-        pass
-    return None
-
 class ChatReq(BaseModel):
     message: str
 
@@ -83,21 +53,37 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         background_tasks.add_task(execute_autonomous_task, user_msg)
         return JSONResponse({
             "type": "text",
-            "content": "जी, मैंने आपका यह काम बैकग्राउंड में शुरू कर दिया है। आप इंटरनेट बंद कर सकते हैं, मैं इसे सर्वर पर पूरा कर दूँगी।",
-            "audio": None
+            "content": "जी, मैंने आपका यह काम बैकग्राउंड में शुरू कर दिया है। आप इंटरनेट बंद कर सकते हैं, मैं इसे सर्वर पर पूरा कर दूँगी।"
         })
 
-    # Rule 2: Image Generation Locked to Pollinations Flux Engine
+    # High-Quality Image Engine with Prompt Enhancement
     if any(k in msg_low for k in ["image", "photo", "tasveer", "picture"]):
         clean_p = msg_low
-        for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer"]:
+        for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do"]:
             clean_p = clean_p.replace(w, "")
         clean_p = clean_p.strip() or "cyberpunk neon supercar"
-        encoded_prompt = urllib.parse.quote(clean_p)
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
-        return JSONResponse({"type": "image", "content": url, "audio": None})
 
-    # Rule 2: Primary Chat Engine (llama-3.1-8b-instant)
+        final_prompt = clean_p
+        if groq_client:
+            try:
+                enh = groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are an expert image prompt translator. Convert the input into a detailed, photorealistic English prompt with 8k resolution, cinematic lighting. Return ONLY the prompt text, no explanations."},
+                        {"role": "user", "content": clean_p}
+                    ],
+                    model="llama-3.1-8b-instant",
+                    temperature=0.3,
+                    max_tokens=60
+                )
+                final_prompt = enh.choices[0].message.content.strip()
+            except Exception:
+                final_prompt = f"{clean_p}, 8k ultra detailed photorealistic"
+
+        encoded_prompt = urllib.parse.quote(final_prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+        return JSONResponse({"type": "image", "content": url})
+
+    # Rule 2: Primary Chat Engine (openai/gpt-oss-120b on Groq)
     reply = ""
     if groq_client:
         try:
@@ -128,8 +114,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
     if not reply:
         reply = "माफ़ कीजिए, सर्वर से संपर्क नहीं हो पा रहा है। कृपया कुछ देर बाद प्रयास करें।"
 
-    audio_data = generate_voice_b64(reply)
-    return JSONResponse({"type": "text", "content": reply, "audio": audio_data})
+    return JSONResponse({"type": "text", "content": reply})
 
 @app.get("/api/tasks")
 def get_tasks():
@@ -144,31 +129,86 @@ HTML_DASHBOARD = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maya Meta-Agent OS</title>
     <style>
-        :root { --bg: #0d1117; --panel: #161b22; --accent: #238636; --border: #30363d; --text: #c9d1d9; }
+        :root { --bg: #0d1117; --panel: #161b22; --accent: #238636; --border: #30363d; --text: #c9d1d9; --blue: #1f6feb; }
         body { margin:0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display:flex; flex-direction:column; height:100vh; }
-        header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 1.1rem; font-weight: bold; }
+        header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 1.1rem; font-weight: bold; display:flex; justify-content:space-between; align-items:center; }
         #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
         .msg { max-width: 85%; padding: 12px 16px; border-radius: 12px; line-height: 1.5; font-size: 0.95rem; }
-        .user { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 2px; }
+        .user { align-self: flex-end; background: var(--blue); color: #fff; border-bottom-right-radius: 2px; }
         .maya { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
-        .img-card { margin-top: 10px; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
-        #controls { padding: 16px; background: var(--panel); border-top: 1px solid var(--border); display: flex; gap: 10px; }
+        .img-box { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+        .img-card { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+        .download-btn { align-self: flex-start; background: #21262d; border: 1px solid var(--border); color: #58a6ff; padding: 8px 14px; border-radius: 6px; font-size: 0.85rem; font-weight: bold; cursor: pointer; text-decoration: none; }
+        .download-btn:hover { background: #30363d; }
+        #controls { padding: 16px; background: var(--panel); border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
         input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; outline: none; font-size: 1rem; }
         button { padding: 12px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        #micBtn { background: #21262d; border: 1px solid var(--border); }
+        #micBtn.listening { background: #da3633; }
     </style>
 </head>
 <body>
-    <header>🤖 Maya Meta-Agent OS <span style="font-size:0.75rem; color:#8b949e;">Render 24/7 Core</span></header>
+    <header>
+        <div>🤖 Maya Meta-Agent OS <span style="font-size:0.75rem; color:#3fb950;">V2.0 LIVE</span></div>
+        <span style="font-size:0.8rem; color:#3fb950;">● 24/7 Active</span>
+    </header>
     <div id="chat">
         <div class="msg maya">नमस्ते! मैं Maya हूँ। आपका सर्वर 24/7 एक्टिव है। आप मुझसे बातचीत कर सकते हैं या कोई तस्वीर बनवा सकते हैं!</div>
     </div>
     <div id="controls">
-        <input type="text" id="userInput" placeholder="Maya ko koi bhi command dein..." onkeydown="if(event.key==='Enter') send()">
+        <button id="micBtn" onclick="toggleMic()">🎤 Mic</button>
+        <input type="text" id="userInput" placeholder="Maya ko koi bhi command dein ya bolein..." onkeydown="if(event.key==='Enter') send()">
         <button id="btn" onclick="send()">Send</button>
     </div>
-    <audio id="player" style="display:none;"></audio>
 
     <script>
+        // Self Keep-Alive: Browser tab khula rehne par har 4 minute me server ping karega
+        setInterval(async () => {
+            try { await fetch('/api/tasks'); } catch(e) {}
+        }, 240000);
+
+        let recognition = null;
+        let isListening = false;
+
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.lang = 'hi-IN';
+
+            recognition.onstart = () => {
+                isListening = true;
+                document.getElementById('micBtn').classList.add('listening');
+            };
+            recognition.onresult = (e) => {
+                document.getElementById('userInput').value = e.results[0][0].transcript;
+                send();
+            };
+            recognition.onend = () => stopMic();
+            recognition.onerror = () => stopMic();
+        }
+
+        function toggleMic() {
+            if(!recognition) return alert('Browser me mic support nahi hai. Chrome/Edge use karein.');
+            isListening ? recognition.stop() : recognition.start();
+        }
+
+        function stopMic() {
+            isListening = false;
+            document.getElementById('micBtn').classList.remove('listening');
+        }
+
+        // Instant Web Speech Synthesis (Zero Backend Delay)
+        function speakText(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance(text);
+                utter.lang = 'hi-IN';
+                utter.rate = 1.05;
+                window.speechSynthesis.speak(utter);
+            }
+        }
+
         async function send() {
             const inp = document.getElementById('userInput');
             const txt = inp.value.trim();
@@ -192,11 +232,7 @@ HTML_DASHBOARD = """
                     appendImg(data.content);
                 } else {
                     appendMsg('maya', data.content);
-                    if(data.audio) {
-                        const audio = document.getElementById('player');
-                        audio.src = "data:audio/wav;base64," + data.audio;
-                        audio.play();
-                    }
+                    speakText(data.content);
                 }
             } catch(e) {
                 removeLoading(loadingId);
@@ -218,7 +254,7 @@ HTML_DASHBOARD = """
             const div = document.createElement('div');
             div.id = id;
             div.className = 'msg maya';
-            div.innerText = '⏳ Maya सोच रही है...';
+            div.innerText = '⚡ Maya सोच रही है...';
             c.appendChild(div);
             c.scrollTop = c.scrollHeight;
         }
@@ -228,11 +264,33 @@ HTML_DASHBOARD = """
             if(el) el.remove();
         }
 
+        async function downloadDirect(url) {
+            try {
+                const res = await fetch(url);
+                const blob = await res.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = 'maya_visual_' + Date.now() + '.jpg';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(blobUrl);
+            } catch(err) {
+                window.open(url, '_blank');
+            }
+        }
+
         function appendImg(src) {
             const c = document.getElementById('chat');
             const div = document.createElement('div');
             div.className = 'msg maya';
-            div.innerHTML = `<div>✨ <b>Visual:</b></div><img src="${src}" class="img-card" alt="Generated visual" />`;
+            div.innerHTML = `
+                <div class="img-box">
+                    <div>✨ <b>Visual:</b></div>
+                    <img src="${src}" class="img-card" alt="Generated visual" />
+                    <button class="download-btn" onclick="downloadDirect('${src}')">⬇️ Download Image</button>
+                </div>`;
             c.appendChild(div);
             c.scrollTop = c.scrollHeight;
         }
