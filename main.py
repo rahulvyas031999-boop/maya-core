@@ -1,6 +1,8 @@
 import os
 import io
 import wave
+import time
+import random
 import base64
 import urllib.parse
 from fastapi import FastAPI, BackgroundTasks
@@ -74,13 +76,17 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             "audio": None
         })
 
-    # Image generation route
-    if any(k in msg for k in ["image", "photo", "tasveer"]):
-        p = msg
-        for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer"]:
-            p = p.replace(w, "")
-        p = p.strip() or "cyberpunk neon supercar"
-        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(p)}?width=1024&height=1024&nologo=true"
+    # Image generation route (Fixed URL & Cache-busting)
+    if any(k in msg for k in ["image", "photo", "tasveer", "picture"]):
+        clean_prompt = msg
+        for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do", "dikhaye", "ak"]:
+            clean_prompt = clean_prompt.replace(w, "")
+        clean_prompt = clean_prompt.strip() or "luxurious futuristic supercar in neon city"
+        
+        encoded_prompt = urllib.parse.quote(clean_prompt)
+        seed = random.randint(1000, 999999)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&nologo=true&model=flux"
+        
         return JSONResponse({"type": "image", "content": url, "audio": None})
 
     # High-Intelligence chat route (Female Personality)
@@ -135,7 +141,8 @@ def home():
             .msg { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; }
             .user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 2px; }
             .maya { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
-            .img-card { width: 100%; max-width: 400px; border-radius: 8px; margin-top: 8px; border: 1px solid var(--border); }
+            .img-container { min-height: 250px; display: flex; flex-direction: column; gap: 8px; }
+            .img-card { width: 100%; max-width: 480px; border-radius: 8px; border: 1px solid var(--border); display: block; }
             #bar { padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); display: flex; gap: 10px; }
             input { flex: 1; padding: 12px 16px; background: var(--bg); color: #fff; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 1rem; }
             input:focus { border-color: var(--accent); }
@@ -183,7 +190,7 @@ def home():
                         if(data.audio) document.getElementById('snd').src = 'data:audio/wav;base64,' + data.audio;
                     }
                 } catch(e) {
-                    loadDiv.innerText = '⚠️ Server connecting issue, please retry.';
+                    loadDiv.innerText = '⚠️ सर्वर कनेक्ट होने में समय ले रहा है, कृपया दोबारा प्रयास करें।';
                 }
             }
 
@@ -200,8 +207,8 @@ def home():
             function appendImg(url) {
                 const c = document.getElementById('chat');
                 const d = document.createElement('div');
-                d.className = 'msg maya';
-                d.innerHTML = `<div>✨ Generated Visual:</div><img src="${url}" class="img-card" />`;
+                d.className = 'msg maya img-container';
+                d.innerHTML = `<div>✨ आपकी इमेज तैयार हो रही है...</div><img src="${url}" class="img-card" onload="this.previousElementSibling.innerText='✨ आपकी इमेज:'" onerror="this.parentElement.innerHTML='⚠️ इमेज लोड नहीं हो सकी, दोबारा कोशिश करें।'"/>`;
                 c.appendChild(d);
                 c.scrollTop = c.scrollHeight;
             }
