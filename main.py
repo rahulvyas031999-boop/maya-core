@@ -45,12 +45,12 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             "content": "🚀 आपका टास्क रजिस्टर हो गया है! आप इंटरनेट बंद कर सकते हैं, मैं बैकग्राउंड में यह काम पूरा कर दूँगी।"
         })
 
-    # Image generation route
+    # Image generation route (Direct Pollinations Flux)
     if any(k in msg for k in ["image", "photo", "tasveer", "picture"]):
         clean_prompt = msg
         for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do", "dikhaye", "ak"]:
             clean_prompt = clean_prompt.replace(w, "")
-        clean_prompt = clean_prompt.strip() or "luxurious futuristic supercar in neon city"
+        clean_prompt = clean_prompt.strip() or "futuristic supercar in neon rain"
         
         encoded_prompt = urllib.parse.quote(clean_prompt)
         seed = random.randint(1000, 999999)
@@ -60,21 +60,16 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
     # Female System Prompt
     system_prompt = (
         "You are Maya, an intelligent, polite, and caring female AI assistant. "
-        "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi'). "
-        "Always address the user respectfully as 'aap' (never ever use 'tu' or 'tera'). "
+        "Speak strictly in a natural, warm, and feminine Hinglish tone (always use female grammar like 'karti hoon', 'bata sakti hoon', 'kar dungi', 'samajh gayi'). "
+        "Always address the user respectfully as 'aap' (never use 'tu' or 'tera'). "
         "Keep your responses concise, smart, and friendly."
     )
 
-    # Chat Engine (Primary: Gemini 2.5 Flash, Backup: Groq Llama 3.1)
     reply = "माफ़ कीजिए, मैं अभी प्रोसेस नहीं कर पा रही हूँ।"
+    
+    # 1. First Priority: Groq Llama 3.1 Instant (Ultra-Fast 0.2s)
     try:
-        if gemini_client:
-            res = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=f"{system_prompt}\nUser: {msg}"
-            )
-            reply = res.text
-        elif groq_client:
+        if groq_client:
             comp = groq_client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -83,8 +78,23 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
                 model="llama-3.1-8b-instant"
             )
             reply = comp.choices[0].message.content
-    except Exception as e:
-        reply = f"Error: {str(e)}"
+        elif gemini_client:
+            res = gemini_client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=f"{system_prompt}\nUser: {msg}"
+            )
+            reply = res.text
+    except Exception:
+        # 2. Backup: Gemini 3.6 Flash
+        try:
+            if gemini_client:
+                res = gemini_client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=f"{system_prompt}\nUser: {msg}"
+                )
+                reply = res.text
+        except Exception as e:
+            reply = f"Error: {str(e)}"
 
     return JSONResponse({"type": "text", "content": reply})
 
@@ -140,7 +150,7 @@ def home():
                 inp.value = '';
                 
                 append('user', v);
-                const loadDiv = append('maya', '⏳ Maya is typing...');
+                const loadDiv = append('maya', '⏳ Maya typing...');
 
                 try {
                     const res = await fetch('/api/chat', {
@@ -175,7 +185,7 @@ def home():
                 const c = document.getElementById('chat');
                 const d = document.createElement('div');
                 d.className = 'msg maya img-container';
-                d.innerHTML = `<div>✨ आपकी इमेज तैयार हो रही है...</div><img src="${url}" class="img-card" onload="this.previousElementSibling.innerText='✨ आपकी इमेज:'" onerror="this.parentElement.innerHTML='⚠️ इमेज लोड नहीं हो सकी।'"/>`;
+                d.innerHTML = `<div>✨ आपकी इमेज:</div><img src="${url}" class="img-card" onload="this.style.display='block'" onerror="this.parentElement.innerHTML='⚠️ इमेज लोड नहीं हो सकी।'"/>`;
                 c.appendChild(d);
                 c.scrollTop = c.scrollHeight;
             }
