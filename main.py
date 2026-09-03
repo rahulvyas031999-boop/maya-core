@@ -5,7 +5,7 @@ import base64
 import urllib.parse
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from groq import Groq
 from google import genai
@@ -20,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API Keys environment variables se aayengi (Secure)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -31,7 +30,7 @@ TASK_LOGS = []
 
 def execute_autonomous_task(task_desc: str):
     TASK_LOGS.append(f"Started: {task_desc}")
-    # Autonomous task processing
+    # Autonomous task execution placeholder
     TASK_LOGS.append(f"Completed: {task_desc}")
 
 def pcm_to_wav(pcm_data):
@@ -101,7 +100,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=msg)
             reply = res.text
     except Exception as e:
-        reply = f"Error processing: {str(e)}"
+        reply = f"Error: {str(e)}"
 
     return JSONResponse({"type": "text", "content": reply, "audio": generate_voice_b64(reply)})
 
@@ -109,6 +108,95 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
 def get_tasks():
     return {"tasks": TASK_LOGS}
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 def home():
-    return {"status": "Maya Autonomous Engine 24/7 Active"}
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Maya Meta-Agent OS</title>
+        <style>
+            :root { --bg: #090d16; --panel: #111827; --accent: #10b981; --border: #1f2937; --text: #e5e7eb; }
+            body { margin:0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display:flex; flex-direction:column; height:100vh; }
+            header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+            .badge { background: #064e3b; color: #34d399; padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; border: 1px solid #059669; }
+            #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+            .msg { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; }
+            .user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 2px; }
+            .maya { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
+            .img-card { width: 100%; max-width: 400px; border-radius: 8px; margin-top: 8px; border: 1px solid var(--border); }
+            #bar { padding: 14px 20px; background: var(--panel); border-top: 1px solid var(--border); display: flex; gap: 10px; }
+            input { flex: 1; padding: 12px 16px; background: var(--bg); color: #fff; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 1rem; }
+            input:focus { border-color: var(--accent); }
+            button { background: var(--accent); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+            button:hover { opacity: 0.9; }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div style="font-weight: bold; font-size: 1.1rem;">🤖 Maya Autonomous OS</div>
+            <div class="badge">● Live 24/7 (Always Warm)</div>
+        </header>
+        <div id="chat">
+            <div class="msg maya">नमस्ते! Maya 24/7 ऑटोनॉमस इंजन अब एक्टिव है। आप यहाँ मुझसे बात कर सकते हैं, कोई फोटो बनवा सकते हैं (जैसे: 'car ki image'), या ऑटोनॉमस टास्क दे सकते हैं।</div>
+        </div>
+        <div id="bar">
+            <input id="txt" placeholder="Maya ko koi bhi command dein..." onkeydown="if(event.key==='Enter') send()">
+            <button onclick="send()">Send</button>
+        </div>
+        <audio id="snd" autoplay></audio>
+
+        <script>
+            async function send() {
+                const inp = document.getElementById('txt');
+                const v = inp.value.trim();
+                if(!v) return;
+                inp.value = '';
+                
+                append('user', v);
+                const loadDiv = append('maya', '⏳ Processing command...');
+
+                try {
+                    const res = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({message: v})
+                    });
+                    const data = await res.json();
+                    loadDiv.remove();
+
+                    if(data.type === 'image') {
+                        appendImg(data.content);
+                    } else {
+                        append('maya', data.content);
+                        if(data.audio) document.getElementById('snd').src = 'data:audio/wav;base64,' + data.audio;
+                    }
+                } catch(e) {
+                    loadDiv.innerText = '⚠️ Server connecting issue, please retry.';
+                }
+            }
+
+            function append(role, text) {
+                const c = document.getElementById('chat');
+                const d = document.createElement('div');
+                d.className = 'msg ' + role;
+                d.innerText = text;
+                c.appendChild(d);
+                c.scrollTop = c.scrollHeight;
+                return d;
+            }
+
+            function appendImg(url) {
+                const c = document.getElementById('chat');
+                const d = document.createElement('div');
+                d.className = 'msg maya';
+                d.innerHTML = `<div>✨ Generated Visual:</div><img src="${url}" class="img-card" />`;
+                c.appendChild(d);
+                c.scrollTop = c.scrollHeight;
+            }
+        </script>
+    </body>
+    </html>
+    """
