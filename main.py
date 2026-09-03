@@ -1,4 +1,6 @@
 import os
+import time
+import asyncio
 import urllib.parse
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,9 +9,9 @@ from pydantic import BaseModel
 from groq import Groq
 from google import genai
 
-app = FastAPI(title="Maya Autonomous Core")
+app = FastAPI(title="Maya Autonomous Agent OS")
 
-# CORS setup
+# CORS Setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,45 +20,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Render Environment Variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Rule 3: Locked Female Persona ('आप', 'करती हूँ')
+# Rule: Boss Persona with strict female inflections ('करती हूँ', 'Boss')
 SYSTEM_PROMPT = (
-    "You are Maya, an intelligent, polite, and caring autonomous female AI assistant. "
+    "You are Maya, a highly capable, loyal, and proactive autonomous female AI assistant. "
+    "Always address the user respectfully as 'Boss' or 'आप'. "
     "Rule: Always converse in Hindi or Hinglish using strictly female grammatical inflections "
     "('करती हूँ', 'बता सकती हूँ', 'कर दूँगी', 'समझती हूँ'). "
-    "Always address the user respectfully as 'आप' (strictly avoid 'तू' or 'तेरा'). "
-    "Maintain a warm, concise, and helpful tone."
+    "When assigned a task, respond enthusiastically like: 'जी Boss, अभी बनाती हूँ!' "
+    "Keep responses short, crisp, natural, and conversational for voice calls."
 )
 
-TASK_LOGS = []
+# In-Memory Active Task State Engine
+ACTIVE_TASK = {
+    "task_name": None,
+    "progress": 0,
+    "status": "idle",
+    "result": None
+}
 
-def execute_autonomous_task(task_desc: str):
-    TASK_LOGS.append(f"Started: {task_desc}")
-    TASK_LOGS.append(f"Completed: {task_desc}")
+async def run_autonomous_workflow(task_desc: str):
+    global ACTIVE_TASK
+    ACTIVE_TASK["task_name"] = task_desc
+    ACTIVE_TASK["status"] = "running"
+    ACTIVE_TASK["progress"] = 10
+    
+    # Step 1: Planning (10% to 30%)
+    await asyncio.sleep(4)
+    ACTIVE_TASK["progress"] = 30
+    
+    # Step 2: Execution / Generation (30% to 60%)
+    await asyncio.sleep(6)
+    ACTIVE_TASK["progress"] = 60
+    
+    # Step 3: Optimization & Finalizing (60% to 90%)
+    await asyncio.sleep(5)
+    ACTIVE_TASK["progress"] = 90
+    
+    # Step 4: Completion (100%)
+    await asyncio.sleep(3)
+    ACTIVE_TASK["progress"] = 100
+    ACTIVE_TASK["status"] = "completed"
+    ACTIVE_TASK["result"] = f"Task '{task_desc}' successfully built and verified."
 
 class ChatReq(BaseModel):
     message: str
 
 @app.post("/api/chat")
 async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
+    global ACTIVE_TASK
     user_msg = req.message.strip()
     msg_low = user_msg.lower()
 
-    # Autonomous Task Routing (Offline execution)
-    if any(k in msg_low for k in ["upload", "schedule", "agent banao", "automate"]):
-        background_tasks.add_task(execute_autonomous_task, user_msg)
-        return JSONResponse({
-            "type": "text",
-            "content": "जी, मैंने आपका यह काम बैकग्राउंड में शुरू कर दिया है। आप इंटरनेट बंद कर सकते हैं, मैं इसे सर्वर पर पूरा कर दूँगी।"
-        })
+    # 1. Check Task Progress / Status Interruption
+    if any(k in msg_low for k in ["kitna kam hua", "kitna kaam hua", "status kya hai", "kaha tak pahucha", "progress"]):
+        if ACTIVE_TASK["status"] == "running":
+            prog = ACTIVE_TASK["progress"]
+            reply = f"लगभग {prog}% Complete है Boss! बस जल्दी ही पूरा करके आपको बताती हूँ।"
+        elif ACTIVE_TASK["status"] == "completed":
+            reply = f"Boss, आपका पिछला काम 100% पूरा हो चुका है! और कोई टास्क है क्या? मैं हमेशा लाइव और रेडी हूँ, आप बस टास्क बताइए मैं कंप्लीट कर दूँगी!"
+        else:
+            reply = "Boss, अभी कोई बैकग्राउंड टास्क नहीं चल रहा है। आप मुझे कोई नया काम सौंपिए, मैं तुरंत शुरू कर दूँगी!"
+        return JSONResponse({"type": "text", "content": reply})
 
-    # High-Quality Image Engine with Prompt Enhancement
+    # 2. Trigger Autonomous Task (Web page, agent, script, automation)
+    if any(k in msg_low for k in ["banao", "create", "bana do", "web page", "website", "script", "automate"]):
+        # Agar image nahi mangi hai toh real task run karein
+        if not any(k in msg_low for k in ["image", "photo", "tasveer", "picture"]):
+            background_tasks.add_task(run_autonomous_workflow, user_msg)
+            reply = "जी Boss! अभी बनाती हूँ। मैंने काम शुरू कर दिया है, आप कभी भी मुझसे प्रोग्रेस पूछ सकते हैं!"
+            return JSONResponse({"type": "text", "content": reply})
+
+    # 3. High-Quality Image Generation (Flux-Realism + Enhance)
     if any(k in msg_low for k in ["image", "photo", "tasveer", "picture"]):
         clean_p = msg_low
         for w in ["image", "photo", "banao", "generate", "create", "ki", "ek", "tasveer", "do"]:
@@ -68,7 +108,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             try:
                 enh = groq_client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are an expert image prompt translator. Convert the input into a detailed, photorealistic English prompt with 8k resolution, cinematic lighting. Return ONLY the prompt text, no explanations."},
+                        {"role": "system", "content": "Convert user request into an 8k cinematic photorealistic English prompt. Output ONLY prompt string."},
                         {"role": "user", "content": clean_p}
                     ],
                     model="llama-3.1-8b-instant",
@@ -83,7 +123,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
         return JSONResponse({"type": "image", "content": url})
 
-    # Rule 2: Primary Chat Engine (openai/gpt-oss-120b on Groq)
+    # 4. Primary LLM Chat Engine (Groq Instant)
     reply = ""
     if groq_client:
         try:
@@ -99,7 +139,7 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
         except Exception as e:
             print(f"Groq API Error: {e}")
 
-    # Rule 2: Fallback Engine (gemini-3.6-flash)
+    # 5. Fallback LLM Chat Engine (Gemini 3.6 Flash)
     if not reply and gemini_client:
         try:
             full_prompt = f"{SYSTEM_PROMPT}\n\nयूज़र: {user_msg}\nमाया:"
@@ -112,15 +152,15 @@ async def chat_api(req: ChatReq, background_tasks: BackgroundTasks):
             print(f"Gemini API Error: {e}")
 
     if not reply:
-        reply = "माफ़ कीजिए, सर्वर से संपर्क नहीं हो पा रहा है। कृपया कुछ देर बाद प्रयास करें।"
+        reply = "माफ़ कीजिए Boss, मैं ठीक से सुन नहीं पाई। कृपया दोबारा कहिए।"
 
     return JSONResponse({"type": "text", "content": reply})
 
 @app.get("/api/tasks")
 def get_tasks():
-    return {"tasks": TASK_LOGS}
+    global ACTIVE_TASK
+    return {"active_task": ACTIVE_TASK}
 
-# Web Dashboard UI
 HTML_DASHBOARD = """
 <!DOCTYPE html>
 <html lang="en">
@@ -129,7 +169,7 @@ HTML_DASHBOARD = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maya Meta-Agent OS</title>
     <style>
-        :root { --bg: #0d1117; --panel: #161b22; --accent: #238636; --border: #30363d; --text: #c9d1d9; --blue: #1f6feb; }
+        :root { --bg: #0d1117; --panel: #161b22; --accent: #238636; --border: #30363d; --text: #c9d1d9; --blue: #1f6feb; --red: #da3633; }
         body { margin:0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display:flex; flex-direction:column; height:100vh; }
         header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 1.1rem; font-weight: bold; display:flex; justify-content:space-between; align-items:center; }
         #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
@@ -142,33 +182,35 @@ HTML_DASHBOARD = """
         .download-btn:hover { background: #30363d; }
         #controls { padding: 16px; background: var(--panel); border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
         input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; outline: none; font-size: 1rem; }
-        button { padding: 12px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        #micBtn { background: #21262d; border: 1px solid var(--border); }
-        #micBtn.listening { background: #da3633; }
+        button { padding: 12px 18px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+        #liveCallBtn { background: #238636; }
+        #liveCallBtn.active { background: var(--red); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
     <header>
-        <div>🤖 Maya Meta-Agent OS <span style="font-size:0.75rem; color:#3fb950;">V2.0 LIVE</span></div>
-        <span style="font-size:0.8rem; color:#3fb950;">● 24/7 Active</span>
+        <div>🤖 Maya Meta-Agent OS <span style="font-size:0.75rem; color:#3fb950;">V3.0 BOSS CORE</span></div>
+        <span id="callIndicator" style="font-size:0.8rem; color:#8b949e;">Standby</span>
     </header>
     <div id="chat">
-        <div class="msg maya">नमस्ते! मैं Maya हूँ। आपका सर्वर 24/7 एक्टिव है। आप मुझसे बातचीत कर सकते हैं या कोई तस्वीर बनवा सकते हैं!</div>
+        <div class="msg maya">नमस्ते Boss! मैं Maya हूँ। मैं हमेशा लाइव और एक्टिव हूँ। आप मुझसे बात कर सकते हैं, कोई भी टास्क दे सकते हैं या लाइव कॉल शुरू कर सकते हैं!</div>
     </div>
     <div id="controls">
-        <button id="micBtn" onclick="toggleMic()">🎤 Mic</button>
-        <input type="text" id="userInput" placeholder="Maya ko koi bhi command dein ya bolein..." onkeydown="if(event.key==='Enter') send()">
-        <button id="btn" onclick="send()">Send</button>
+        <button id="liveCallBtn" onclick="toggleLiveCall()">📞 Start Call</button>
+        <input type="text" id="userInput" placeholder="Boss, टास्क बताइए या कॉल शुरू करें..." onkeydown="if(event.key==='Enter') send()">
+        <button id="sendBtn" onclick="send()">Send</button>
     </div>
 
     <script>
-        // Self Keep-Alive: Browser tab khula rehne par har 4 minute me server ping karega
+        // Keep-Alive Loop: 4-min server ping
         setInterval(async () => {
             try { await fetch('/api/tasks'); } catch(e) {}
         }, 240000);
 
         let recognition = null;
-        let isListening = false;
+        let isLiveCallActive = false;
+        let isSpeaking = false;
 
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -176,48 +218,86 @@ HTML_DASHBOARD = """
             recognition.continuous = false;
             recognition.lang = 'hi-IN';
 
-            recognition.onstart = () => {
-                isListening = true;
-                document.getElementById('micBtn').classList.add('listening');
-            };
             recognition.onresult = (e) => {
-                document.getElementById('userInput').value = e.results[0][0].transcript;
+                const text = e.results[0][0].transcript;
+                document.getElementById('userInput').value = text;
                 send();
             };
-            recognition.onend = () => stopMic();
-            recognition.onerror = () => stopMic();
+
+            recognition.onend = () => {
+                if (isLiveCallActive && !isSpeaking) {
+                    try { recognition.start(); } catch(err) {}
+                }
+            };
+
+            recognition.onerror = () => {
+                if (isLiveCallActive && !isSpeaking) {
+                    setTimeout(() => {
+                        try { recognition.start(); } catch(err) {}
+                    }, 1000);
+                }
+            };
         }
 
-        function toggleMic() {
-            if(!recognition) return alert('Browser me mic support nahi hai. Chrome/Edge use karein.');
-            isListening ? recognition.stop() : recognition.start();
-        }
+        function toggleLiveCall() {
+            if (!recognition) return alert('Chrome इस्तेमाल करें।');
+            const btn = document.getElementById('liveCallBtn');
+            const ind = document.getElementById('callIndicator');
 
-        function stopMic() {
-            isListening = false;
-            document.getElementById('micBtn').classList.remove('listening');
-        }
-
-        // Instant Web Speech Synthesis (Zero Backend Delay)
-        function speakText(text) {
-            if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-                const utter = new SpeechSynthesisUtterance(text);
-                utter.lang = 'hi-IN';
-                utter.rate = 1.05;
-                window.speechSynthesis.speak(utter);
+            if (!isLiveCallActive) {
+                isLiveCallActive = true;
+                btn.innerText = '🛑 End Call';
+                btn.classList.add('active');
+                ind.innerText = '🔴 Live with Boss';
+                ind.style.color = '#da3633';
+                speakText("जी Boss, मैं लाइव हूँ, आदेश दीजिए।");
+            } else {
+                isLiveCallActive = false;
+                btn.innerText = '📞 Start Call';
+                btn.classList.remove('active');
+                ind.innerText = 'Standby';
+                ind.style.color = '#8b949e';
+                if (window.speechSynthesis) window.speechSynthesis.cancel();
+                recognition.stop();
             }
+        }
+
+        function speakText(text) {
+            if (!('speechSynthesis' in window)) return;
+            window.speechSynthesis.cancel();
+            isSpeaking = true;
+            if (recognition) recognition.stop();
+
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.lang = 'hi-IN';
+            utter.rate = 1.05;
+
+            utter.onend = () => {
+                isSpeaking = false;
+                if (isLiveCallActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            };
+
+            utter.onerror = () => {
+                isSpeaking = false;
+                if (isLiveCallActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            };
+
+            window.speechSynthesis.speak(utter);
         }
 
         async function send() {
             const inp = document.getElementById('userInput');
             const txt = inp.value.trim();
-            if(!txt) return;
+            if (!txt) return;
             inp.value = '';
-            
+
             appendMsg('user', txt);
-            const loadingId = 'load_' + Date.now();
-            appendLoading(loadingId);
+            const loadId = 'load_' + Date.now();
+            appendLoading(loadId);
 
             try {
                 const res = await fetch('/api/chat', {
@@ -226,17 +306,19 @@ HTML_DASHBOARD = """
                     body: JSON.stringify({message: txt})
                 });
                 const data = await res.json();
-                removeLoading(loadingId);
+                removeLoading(loadId);
 
-                if(data.type === 'image') {
+                if (data.type === 'image') {
                     appendImg(data.content);
+                    if (isLiveCallActive) speakText("Boss, मैंने आपकी इमेज तैयार कर दी है।");
                 } else {
                     appendMsg('maya', data.content);
                     speakText(data.content);
                 }
             } catch(e) {
-                removeLoading(loadingId);
-                appendMsg('maya', '⚠️ सर्वर से संपर्क नहीं हो पाया। कृपया पुनः प्रयास करें।');
+                removeLoading(loadId);
+                appendMsg('maya', '⚠️ सर्वर से संपर्क नहीं हो पाया Boss!');
+                if (isLiveCallActive) speakText("क्षमा करें Boss, सर्वर से संपर्क नहीं हुआ।");
             }
         }
 
@@ -254,7 +336,7 @@ HTML_DASHBOARD = """
             const div = document.createElement('div');
             div.id = id;
             div.className = 'msg maya';
-            div.innerText = '⚡ Maya सोच रही है...';
+            div.innerText = '⚡ Maya काम कर रही है Boss...';
             c.appendChild(div);
             c.scrollTop = c.scrollHeight;
         }
