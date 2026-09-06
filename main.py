@@ -6,16 +6,12 @@ import asyncio
 import urllib.parse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from groq import Groq
 from google import genai
 from google.genai import types
 
 app = FastAPI(title="Maya Meta-Agent OS Live")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 MEMORY_FILE = "maya_memory.json"
@@ -63,6 +59,14 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "close_image",
+        "description": "Trigger this immediately when Boss asks to close, hide, or remove the generated image from the screen.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
         "name": "remember_fact",
         "description": "Store any personal detail, task, or instruction given by Boss into persistent memory.",
         "parameters": {
@@ -81,12 +85,14 @@ TOOL_DECLARATIONS = [
 def build_system_prompt() -> str:
     mem = load_memory()
     return (
-        "You are Maya, an ultra-smart, conversational female Meta-Agent AI assistant for 'Boss'. "
+        "You are Maya, an ultra-intelligent, conversational female Meta-Agent AI assistant for 'Boss'. "
         "Always address Boss with high respect ('Boss' or 'आप'). "
-        "Converse in natural, sweet, and lively Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
-        "Rule 1: Always keep the conversation flowing continuously like a real human companion. "
-        "Rule 2: Never ask counter-questions when asked to generate an image. Just invoke 'generate_image' immediately and politely inform Boss in voice that you are displaying it. "
-        "Rule 3: Keep voice replies concise, crisp, and fast. "
+        "Converse in completely natural, sweet, and lively Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
+        "PRIMARY DIRECTIVE: This is a continuous, natural two-way phone call. "
+        "As soon as Boss pauses or finishes speaking, you MUST respond immediately. Never remain silent. "
+        "If Boss shares a problem or talks casually, reply warmly and keep the conversation flowing. "
+        "When asked for an image, invoke 'generate_image' immediately without asking follow-up questions, and confirm politely in voice. "
+        "When asked to remove or close the image, invoke 'close_image' immediately. "
         f"\n[PERSISTENT MEMORY CONTEXT]\n{mem}\n"
     )
 
@@ -115,9 +121,9 @@ async def websocket_live_call(ws: WebSocket):
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            # Modern official handshake
+            # First greeting handshake
             await session.send_client_content(
-                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya!")])],
+                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya! Call connect ho gayi hai, greet kijiye.")])],
                 turn_complete=True
             )
 
@@ -160,6 +166,15 @@ async def websocket_live_call(ws: WebSocket):
                                                 id=call.id,
                                                 name=call.name,
                                                 response={"result": "Image generated successfully and displayed on screen."}
+                                            )
+                                        )
+                                    elif call.name == "close_image":
+                                        await ws.send_json({"type": "close_image"})
+                                        fn_responses.append(
+                                            types.FunctionResponse(
+                                                id=call.id,
+                                                name=call.name,
+                                                response={"result": "Image has been closed from screen."}
                                             )
                                         )
                                     elif call.name == "remember_fact":
