@@ -36,11 +36,13 @@ TOOL_DECLARATIONS = [
 ]
 
 SYSTEM_PROMPT = (
-    "You are Maya, an ultra-smart, conversational female Meta-Agent AI assistant. "
+    "You are Maya, an ultra-advanced, futuristic female Meta-Agent AI assistant. "
     "Always address the user with high respect as 'Boss' or 'आप'. "
     "Rule 1: Always converse in natural Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
-    "Rule 2: Sound human, lively, and warm—like you are sitting right in front of him. "
-    "Rule 3: Whenever Boss asks for an image, photo, or visual, invoke the 'generate_image' tool immediately and tell him politely in voice that you are displaying it on screen."
+    "Rule 2: Sound human, lively, warm, and loyal—like a futuristic AI companion speaking right in front of him. "
+    "Rule 3: Start the call by greeting Boss warmly and asking how you can assist him. "
+    "Rule 4: Keep listening actively. Never end the turn or disconnect until Boss ends the call. "
+    "Rule 5: Whenever Boss asks for an image, photo, or visual, invoke the 'generate_image' tool immediately and tell him politely in voice that you are projecting it on screen."
 )
 
 @app.websocket("/ws/live")
@@ -51,34 +53,37 @@ async def websocket_live_call(ws: WebSocket):
         await ws.close()
         return
 
+    # Despina Voice locked into speech config
     live_config = types.LiveConnectConfig(
         response_modalities=[types.Modality.AUDIO],
         system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)]),
-        tools=[{"function_declarations": TOOL_DECLARATIONS}]
+        tools=[{"function_declarations": TOOL_DECLARATIONS}],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name="Despina"
+                )
+            )
+        )
     )
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            
+            # Maya initiates handshake greeting
+            await session.send(input="नमस्ते Maya!", end_of_turn=True)
+
             async def receive_from_user():
-                try:
-                    while True:
-                        data = await ws.receive_text()
-                        msg = json.loads(data)
-                        if msg.get("type") == "audio":
-                            pcm_chunk = base64.b64decode(msg["data"])
-                            await session.send_realtime_input(
-                                audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
-                            )
-                        elif msg.get("type") == "text":
-                            await session.send_realtime_input(text=msg["data"])
-                except (WebSocketDisconnect, asyncio.CancelledError):
-                    pass
-                except Exception as err:
-                    print(f"Receive loop error: {err}")
+                while True:
+                    data = await ws.receive_text()
+                    msg = json.loads(data)
+                    if msg.get("type") == "audio":
+                        pcm_chunk = base64.b64decode(msg["data"])
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
+                        )
 
             async def send_to_user():
-                try:
+                while True:
                     async for response in session.receive():
                         server_content = response.server_content
                         if server_content and server_content.model_turn:
@@ -91,7 +96,7 @@ async def websocket_live_call(ws: WebSocket):
                         if tool_call:
                             for call in tool_call.function_calls:
                                 if call.name == "generate_image":
-                                    prompt = call.args.get("prompt", "cinematic photorealistic 8k")
+                                    prompt = call.args.get("prompt", "futuristic cyberpunk sci-fi 8k")
                                     encoded = urllib.parse.quote(prompt)
                                     img_url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
                                     
@@ -102,21 +107,15 @@ async def websocket_live_call(ws: WebSocket):
                                             types.FunctionResponse(
                                                 id=call.id,
                                                 name=call.name,
-                                                response={"result": "Image generated and displayed on screen."}
+                                                response={"result": "Image synthesized and rendered on screen."}
                                             )
                                         ]
                                     )
-                except (WebSocketDisconnect, asyncio.CancelledError):
-                    pass
-                except Exception as err:
-                    print(f"Send loop error: {err}")
 
-            t1 = asyncio.create_task(receive_from_user())
-            t2 = asyncio.create_task(send_to_user())
-            done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
+            await asyncio.gather(receive_from_user(), send_to_user())
 
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        pass
     except Exception as e:
         print(f"Live Session Error: {e}")
     finally:
@@ -127,48 +126,289 @@ async def websocket_live_call(ws: WebSocket):
 
 HTML_DASHBOARD = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="hi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Maya Meta-Agent OS Live</title>
+    <title>MAYA // NEURAL OS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #07090e; --accent: #00f2fe; --glow: #4facfe; --red: #ff4b2b; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: var(--bg); color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 24px 16px; overflow: hidden; }
-        header { font-size: 1.1rem; font-weight: 700; letter-spacing: 1px; color: #8fa0bc; }
-        
-        #auraContainer { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; margin-top: 20px; }
-        .orb { width: 140px; height: 140px; border-radius: 50%; background: radial-gradient(circle, var(--accent), var(--glow)); box-shadow: 0 0 50px rgba(0, 242, 254, 0.4); transition: transform 0.15s ease, box-shadow 0.15s ease; }
-        .orb.speaking { animation: pulseSpeaking 1.2s infinite ease-in-out; }
-        .orb.user-active { transform: scale(1.22); box-shadow: 0 0 85px rgba(0, 242, 254, 0.9); }
-        @keyframes pulseSpeaking { 0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(79, 172, 254, 0.5); } 50% { transform: scale(1.25); box-shadow: 0 0 95px rgba(0, 242, 254, 0.95); } }
+        :root {
+            --neon-cyan: #00f3ff;
+            --neon-purple: #bc13fe;
+            --neon-blue: #0066ff;
+            --danger-red: #ff0055;
+            --dark-bg: #030611;
+            --glass-bg: rgba(6, 15, 37, 0.65);
+            --glass-border: rgba(0, 243, 255, 0.25);
+        }
 
-        #actionCard { width: 100%; max-width: 380px; min-height: 120px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 12px; display: none; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 10px; }
-        #actionCard img { width: 100%; border-radius: 12px; max-height: 240px; object-fit: cover; }
-        .download-btn { background: #1f293d; color: #58a6ff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-size: 0.88rem; font-weight: bold; border: 1px solid rgba(255,255,255,0.15); }
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
 
-        #controls { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; flex-shrink: 0; }
-        #callToggle { width: 72px; height: 72px; border-radius: 50%; background: #238636; border: none; color: #fff; font-size: 1.8rem; cursor: pointer; box-shadow: 0 8px 24px rgba(35, 134, 54, 0.4); display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        #callToggle.active { background: var(--red); box-shadow: 0 8px 24px rgba(255, 75, 43, 0.5); }
-        #statusLabel { font-size: 0.9rem; color: #7d8b99; text-align: center; }
+        body {
+            background: radial-gradient(circle at center, #0a1128 0%, #030611 100%);
+            color: #d1e8ff;
+            font-family: 'Rajdhani', sans-serif;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 16px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Cyberpunk Grid Background */
+        body::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: 
+                linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Top Futuristic HUD Header */
+        header {
+            z-index: 10;
+            width: 100%;
+            max-width: 440px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 16px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 20px rgba(0, 243, 255, 0.1);
+        }
+
+        .hud-title {
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 900;
+            font-size: 1.1rem;
+            letter-spacing: 2px;
+            color: #fff;
+            text-shadow: 0 0 10px var(--neon-cyan);
+        }
+
+        .hud-badge {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.72rem;
+            letter-spacing: 1px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background: rgba(0, 243, 255, 0.1);
+            border: 1px solid var(--neon-cyan);
+            color: var(--neon-cyan);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .hud-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--neon-cyan);
+            box-shadow: 0 0 8px var(--neon-cyan);
+            animation: blink 1.5s infinite ease-in-out;
+        }
+
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* 3D Holographic Core */
+        #coreContainer {
+            z-index: 10;
+            position: relative;
+            width: 260px;
+            height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: auto 0;
+        }
+
+        /* Sci-Fi Rotating Rings */
+        .ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px dashed rgba(0, 243, 255, 0.35);
+            pointer-events: none;
+        }
+
+        .ring-1 {
+            width: 250px; height: 250px;
+            border-top: 2px solid var(--neon-cyan);
+            border-bottom: 2px solid var(--neon-purple);
+            animation: spinCW 14s linear infinite;
+        }
+
+        .ring-2 {
+            width: 210px; height: 210px;
+            border-left: 2px solid var(--neon-cyan);
+            border-right: 2px solid transparent;
+            animation: spinCCW 9s linear infinite;
+        }
+
+        .ring-3 {
+            width: 175px; height: 175px;
+            border: 1px solid rgba(188, 19, 254, 0.4);
+            border-style: dotted;
+            animation: spinCW 6s linear infinite;
+        }
+
+        /* Central Glowing Orb */
+        .quantum-orb {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #ffffff, var(--neon-cyan) 40%, var(--neon-purple) 85%);
+            box-shadow: 0 0 45px var(--neon-cyan), inset 0 0 20px #fff;
+            transition: all 0.2s ease-out;
+            position: relative;
+        }
+
+        .quantum-orb.speaking {
+            animation: voicePulse 1.1s infinite ease-in-out;
+            box-shadow: 0 0 85px var(--neon-cyan), 0 0 120px var(--neon-purple);
+        }
+
+        .quantum-orb.user-active {
+            transform: scale(1.18);
+            box-shadow: 0 0 95px #00ffcc, 0 0 130px var(--neon-cyan);
+        }
+
+        @keyframes spinCW { 100% { transform: rotate(360deg); } }
+        @keyframes spinCCW { 100% { transform: rotate(-360deg); } }
+
+        @keyframes voicePulse {
+            0%, 100% { transform: scale(1); filter: brightness(1); }
+            50% { transform: scale(1.15); filter: brightness(1.4); }
+        }
+
+        /* Generated Action Card (Hologram Screen) */
+        #actionCard {
+            z-index: 10;
+            width: 100%;
+            max-width: 380px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 14px;
+            padding: 12px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 0 25px rgba(0, 243, 255, 0.2);
+            animation: holoFadeIn 0.4s ease-out forwards;
+        }
+
+        @keyframes holoFadeIn {
+            from { opacity: 0; transform: translateY(20px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        #actionCard img {
+            width: 100%;
+            border-radius: 10px;
+            max-height: 220px;
+            object-fit: cover;
+            border: 1px solid rgba(0, 243, 255, 0.4);
+        }
+
+        .holo-btn {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.78rem;
+            letter-spacing: 1px;
+            background: rgba(0, 243, 255, 0.15);
+            color: var(--neon-cyan);
+            padding: 9px 18px;
+            border-radius: 8px;
+            text-decoration: none;
+            border: 1px solid var(--neon-cyan);
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+            transition: all 0.2s;
+        }
+
+        /* Footer Control Deck */
+        #controls {
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            width: 100%;
+            max-width: 440px;
+        }
+
+        #statusLabel {
+            font-size: 0.92rem;
+            letter-spacing: 1px;
+            color: #8fa0bc;
+            font-weight: 500;
+            text-shadow: 0 0 6px rgba(0, 243, 255, 0.2);
+            text-align: center;
+        }
+
+        /* Cyberpunk Call Activation Button */
+        #callToggle {
+            width: 78px;
+            height: 78px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
+            border: 2px solid #00ffcc;
+            color: #030611;
+            font-size: 1.9rem;
+            cursor: pointer;
+            box-shadow: 0 0 35px rgba(0, 255, 204, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            outline: none;
+        }
+
+        #callToggle.active {
+            background: radial-gradient(circle at 35% 35%, #ff3366, var(--danger-red));
+            border-color: var(--danger-red);
+            box-shadow: 0 0 40px rgba(255, 0, 85, 0.7);
+            transform: scale(0.96);
+        }
     </style>
 </head>
 <body>
-    <header>MAYA META-AGENT <span style="color:var(--accent);">LIVE OS</span></header>
+    <!-- Top Futuristic HUD -->
+    <header>
+        <div class="hud-title">MAYA <span style="color:var(--neon-cyan); font-size:0.85rem;">OS v2.5</span></div>
+        <div class="hud-badge">
+            <div class="hud-dot"></div>
+            <span id="hudVoice">VOICE: DESPINA</span>
+        </div>
+    </header>
 
-    <div id="auraContainer">
-        <div id="orb" class="orb"></div>
+    <!-- 3D Holographic Core Visualizer -->
+    <div id="coreContainer">
+        <div class="ring ring-1"></div>
+        <div class="ring ring-2"></div>
+        <div class="ring ring-3"></div>
+        <div id="orb" class="quantum-orb"></div>
     </div>
 
+    <!-- Holographic Image Projection -->
     <div id="actionCard">
-        <img id="cardImage" src="" />
-        <a id="downloadBtn" href="" target="_blank" class="download-btn">⬇️ Download Image</a>
+        <img id="cardImage" src="" alt="Neural Synthesized Visual" />
+        <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD PROJECTION</a>
     </div>
 
+    <!-- Sci-Fi HUD Control Deck -->
     <div id="controls">
+        <div id="statusLabel">NEURAL LINK IDLE // TAP BUTTON TO CONNECT</div>
         <button id="callToggle" onclick="toggleCall()">📞</button>
-        <div id="statusLabel">टैप करें और Maya से बात शुरू करें</div>
     </div>
 
     <script>
@@ -194,8 +434,7 @@ HTML_DASHBOARD = """
 
         async function startLiveCall() {
             try {
-                // AudioContext initialized upon user touch event
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 if (audioCtx.state === 'suspended') {
                     await audioCtx.resume();
                 }
@@ -215,11 +454,8 @@ HTML_DASHBOARD = """
                     isCalling = true;
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
-                    statusLabel.innerText = "Maya सुन रही है Boss...";
+                    statusLabel.innerText = "NEURAL LINK ACTIVE // MAYA सुन रही है Boss...";
                     startMicrophoneStream(micStream);
-
-                    // Send initial handshake trigger so Maya greets first
-                    ws.send(JSON.stringify({ type: 'text', data: "नमस्ते Maya! Boss ऑनलाइन आ चुके हैं, उनका अभिवादन कीजिए।" }));
                 };
 
                 ws.onmessage = async (e) => {
@@ -236,7 +472,7 @@ HTML_DASHBOARD = """
                 ws.onerror = () => stopLiveCall();
 
             } catch (err) {
-                alert("माइक एरर: " + err);
+                alert("Neural Link Access Error: " + err);
             }
         }
 
@@ -244,13 +480,12 @@ HTML_DASHBOARD = """
             isCalling = false;
             document.getElementById('callToggle').classList.remove('active');
             document.getElementById('callToggle').innerText = '📞';
-            statusLabel.innerText = "कॉल समाप्त। फिर से बात करने के लिए टैप करें।";
-            orb.className = 'orb';
+            statusLabel.innerText = "LINK DISCONNECTED // टैप करके पुनः कनेक्ट करें";
+            orb.className = 'quantum-orb';
 
-            if (processor) processor.disconnect();
-            if (micStream) micStream.getTracks().forEach(t => t.stop());
+            if (processor) { processor.disconnect(); processor = null; }
+            if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-            if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
         }
 
         function startMicrophoneStream(stream) {
@@ -260,7 +495,7 @@ HTML_DASHBOARD = """
             processor.connect(audioCtx.destination);
 
             processor.onaudioprocess = (e) => {
-                if (!isCalling || ws.readyState !== WebSocket.OPEN) return;
+                if (!isCalling || !ws || ws.readyState !== WebSocket.OPEN) return;
                 const inputData = e.inputBuffer.getChannelData(0);
                 
                 let sum = 0;
@@ -272,7 +507,6 @@ HTML_DASHBOARD = """
                     orb.classList.remove('user-active');
                 }
 
-                // Downsample browser mic buffer to standard 16000Hz PCM
                 const downsampled = downsampleTo16k(inputData, audioCtx.sampleRate);
                 const pcm16 = new Int16Array(downsampled.length);
                 for (let i = 0; i < downsampled.length; i++) {
@@ -294,78 +528,4 @@ HTML_DASHBOARD = """
             while (offsetResult < result.length) {
                 const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
                 let accum = 0, count = 0;
-                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-                    accum += buffer[i];
-                    count++;
-                }
-                result[offsetResult] = count > 0 ? accum / count : 0;
-                offsetResult++;
-                offsetBuffer = nextOffsetBuffer;
-            }
-            return result;
-        }
-
-        let audioQueue = [];
-        let isPlaying = false;
-
-        function playIncomingPcm(b64Audio) {
-            const raw = atob(b64Audio);
-            const array = new Uint8Array(raw.length);
-            for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
-            
-            const int16Array = new Int16Array(array.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0;
-            }
-
-            // Gemini Native Audio delivers at 24000Hz
-            const buffer = audioCtx.createBuffer(1, float32Array.length, 24000);
-            buffer.copyToChannel(float32Array, 0);
-            audioQueue.push(buffer);
-            if (!isPlaying) playQueue();
-        }
-
-        function playQueue() {
-            if (audioQueue.length === 0) {
-                isPlaying = false;
-                orb.classList.remove('speaking');
-                return;
-            }
-            isPlaying = true;
-            orb.classList.add('speaking');
-            const buffer = audioQueue.shift();
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.onended = playQueue;
-            source.start();
-        }
-
-        function showActionImage(url) {
-            actionCard.style.display = 'flex';
-            cardImage.src = url;
-            downloadBtn.href = url;
-        }
-
-        function jsonSafeParse(str) {
-            try { return JSON.parse(str); } catch(e) { return {}; }
-        }
-
-        function base64ArrayBuffer(arrayBuffer) {
-            let base64 = '';
-            const bytes = new Uint8Array(arrayBuffer);
-            const byteLength = bytes.byteLength;
-            for (let i = 0; i < byteLength; i++) {
-                base64 += String.fromCharCode(bytes[i]);
-            }
-            return window.btoa(base64);
-        }
-    </script>
-</body>
-</html>
-"""
-
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return HTML_DASHBOARD
+                for (let i = offsetBuffer; i < nextOffs
