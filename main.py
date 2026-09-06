@@ -16,6 +16,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# Gemini Client setup with v1alpha for Live WebSocket
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 TOOL_DECLARATIONS = [
@@ -58,7 +59,8 @@ async def websocket_live_call(ws: WebSocket):
     )
 
     try:
-        async with gemini_client.aio.live.connect(model="gemini-2.5-flash-live-preview", config=live_config) as session:
+        # Correct official model for bidiGenerateContent / Live API
+        async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
             
             async def receive_from_user():
                 try:
@@ -72,6 +74,8 @@ async def websocket_live_call(ws: WebSocket):
                             )
                 except (WebSocketDisconnect, asyncio.CancelledError):
                     pass
+                except Exception as err:
+                    print(f"Receive loop error: {err}")
 
             async def send_to_user():
                 try:
@@ -83,11 +87,12 @@ async def websocket_live_call(ws: WebSocket):
                                     b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
                                     await ws.send_json({"type": "audio", "data": b64_audio})
 
+                        # Tool Handling
                         tool_call = response.tool_call
                         if tool_call:
                             for call in tool_call.function_calls:
                                 if call.name == "generate_image":
-                                    prompt = call.args.get("prompt", "cinematic photorealistic")
+                                    prompt = call.args.get("prompt", "cinematic photorealistic 8k")
                                     encoded = urllib.parse.quote(prompt)
                                     img_url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
                                     
@@ -104,15 +109,21 @@ async def websocket_live_call(ws: WebSocket):
                                     )
                 except (WebSocketDisconnect, asyncio.CancelledError):
                     pass
+                except Exception as err:
+                    print(f"Send loop error: {err}")
 
-            await asyncio.gather(receive_from_user(), send_to_user())
+            t1 = asyncio.create_task(receive_from_user())
+            t2 = asyncio.create_task(send_to_user())
+            done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
 
     except Exception as e:
         print(f"Live Session Error: {e}")
     finally:
         try:
             await ws.close()
-        except:
+        except Exception:
             pass
 
 HTML_DASHBOARD = """
@@ -128,19 +139,16 @@ HTML_DASHBOARD = """
         body { background: var(--bg); color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 24px 16px; overflow: hidden; }
         header { font-size: 1.1rem; font-weight: 700; letter-spacing: 1px; color: #8fa0bc; }
         
-        /* 3D Glowing Voice Orb */
         #auraContainer { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; margin-top: 20px; }
         .orb { width: 140px; height: 140px; border-radius: 50%; background: radial-gradient(circle, var(--accent), var(--glow)); box-shadow: 0 0 50px rgba(0, 242, 254, 0.4); transition: transform 0.15s ease, box-shadow 0.15s ease; }
         .orb.speaking { animation: pulseSpeaking 1.2s infinite ease-in-out; }
         .orb.user-active { transform: scale(1.22); box-shadow: 0 0 85px rgba(0, 242, 254, 0.9); }
         @keyframes pulseSpeaking { 0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(79, 172, 254, 0.5); } 50% { transform: scale(1.25); box-shadow: 0 0 95px rgba(0, 242, 254, 0.95); } }
 
-        /* Dynamic Action Card for Generated Output */
         #actionCard { width: 100%; max-width: 380px; min-height: 120px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 12px; display: none; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 10px; }
         #actionCard img { width: 100%; border-radius: 12px; max-height: 240px; object-fit: cover; }
         .download-btn { background: #1f293d; color: #58a6ff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-size: 0.88rem; font-weight: bold; border: 1px solid rgba(255,255,255,0.15); }
 
-        /* Bottom Controls */
         #controls { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; flex-shrink: 0; }
         #callToggle { width: 72px; height: 72px; border-radius: 50%; background: #238636; border: none; color: #fff; font-size: 1.8rem; cursor: pointer; box-shadow: 0 8px 24px rgba(35, 134, 54, 0.4); display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
         #callToggle.active { background: var(--red); box-shadow: 0 8px 24px rgba(255, 75, 43, 0.5); }
@@ -214,7 +222,7 @@ HTML_DASHBOARD = """
                 ws.onerror = () => stopLiveCall();
 
             } catch (err) {
-                alert("माइक एक्सेस एरर: " + err);
+                alert("माइक एरर: " + err);
             }
         }
 
@@ -227,8 +235,8 @@ HTML_DASHBOARD = """
 
             if (processor) processor.disconnect();
             if (micStream) micStream.getTracks().forEach(t => t.stop());
-            if (ws) ws.close();
-            if (audioCtx) audioCtx.close();
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
         }
 
         function startMicrophoneStream(stream) {
