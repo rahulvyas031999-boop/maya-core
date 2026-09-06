@@ -308,28 +308,28 @@
             processor.connect(audioCtx.destination);
 
             processor.onaudioprocess = (e) => {
-                // Echo Prevention: Maya bolte samay mic ignore karegi
                 if (!isCalling || !ws || ws.readyState !== WebSocket.OPEN || isMayaSpeaking) return;
                 
                 const inputData = e.inputBuffer.getChannelData(0);
+                
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
                 let rms = Math.sqrt(sum / inputData.length);
                 
-                // Voice Activity Gate (Noise Filter)
-                if (rms > 0.025) {
+                if (rms > 0.02) {
                     orb.classList.add('user-active');
-                    const downsampled = downsampleTo16k(inputData, audioCtx.sampleRate);
-                    const pcm16 = new Int16Array(downsampled.length);
-                    for (let i = 0; i < downsampled.length; i++) {
-                        let s = Math.max(-1, Math.min(1, downsampled[i]));
-                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                    }
-                    const b64Data = base64ArrayBuffer(pcm16.buffer);
-                    ws.send(JSON.stringify({ type: 'audio', data: b64Data }));
                 } else {
                     orb.classList.remove('user-active');
                 }
+
+                const downsampled = downsampleTo16k(inputData, audioCtx.sampleRate);
+                const pcm16 = new Int16Array(downsampled.length);
+                for (let i = 0; i < downsampled.length; i++) {
+                    let s = Math.max(-1, Math.min(1, downsampled[i]));
+                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                const b64Data = base64ArrayBuffer(pcm16.buffer);
+                ws.send(JSON.stringify({ type: 'audio', data: b64Data }));
             };
         }
 
@@ -413,4 +413,4 @@
         }
     </script>
 </body>
-</html>
+    </html>
