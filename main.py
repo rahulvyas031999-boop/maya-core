@@ -53,7 +53,6 @@ async def websocket_live_call(ws: WebSocket):
         await ws.close()
         return
 
-    # Fail-safe speech config for Despina voice
     live_config = {
         "response_modalities": ["AUDIO"],
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
@@ -123,8 +122,7 @@ async def websocket_live_call(ws: WebSocket):
         except Exception:
             pass
 
-HTML_DASHBOARD = """
-<!DOCTYPE html>
+HTML_DASHBOARD = """<!DOCTYPE html>
 <html lang="hi">
 <head>
     <meta charset="UTF-8">
@@ -141,9 +139,7 @@ HTML_DASHBOARD = """
             --glass-bg: rgba(6, 15, 37, 0.65);
             --glass-border: rgba(0, 243, 255, 0.25);
         }
-
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-
         body {
             background: radial-gradient(circle at center, #0a1128 0%, #030611 100%);
             color: #d1e8ff;
@@ -157,7 +153,6 @@ HTML_DASHBOARD = """
             overflow: hidden;
             position: relative;
         }
-
         body::before {
             content: "";
             position: absolute;
@@ -169,7 +164,6 @@ HTML_DASHBOARD = """
             pointer-events: none;
             z-index: 1;
         }
-
         header {
             z-index: 10;
             width: 100%;
@@ -184,7 +178,6 @@ HTML_DASHBOARD = """
             backdrop-filter: blur(10px);
             box-shadow: 0 0 20px rgba(0, 243, 255, 0.1);
         }
-
         .hud-title {
             font-family: 'Orbitron', sans-serif;
             font-weight: 900;
@@ -193,7 +186,6 @@ HTML_DASHBOARD = """
             color: #fff;
             text-shadow: 0 0 10px var(--neon-cyan);
         }
-
         .hud-badge {
             font-family: 'Orbitron', sans-serif;
             font-size: 0.72rem;
@@ -207,16 +199,13 @@ HTML_DASHBOARD = """
             align-items: center;
             gap: 6px;
         }
-
         .hud-dot {
             width: 7px; height: 7px; border-radius: 50%;
             background: var(--neon-cyan);
             box-shadow: 0 0 8px var(--neon-cyan);
             animation: blink 1.5s infinite ease-in-out;
         }
-
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-
         #coreContainer {
             z-index: 10;
             position: relative;
@@ -227,35 +216,30 @@ HTML_DASHBOARD = """
             justify-content: center;
             margin: auto 0;
         }
-
         .ring {
             position: absolute;
             border-radius: 50%;
             border: 1px dashed rgba(0, 243, 255, 0.35);
             pointer-events: none;
         }
-
         .ring-1 {
             width: 250px; height: 250px;
             border-top: 2px solid var(--neon-cyan);
             border-bottom: 2px solid var(--neon-purple);
             animation: spinCW 14s linear infinite;
         }
-
         .ring-2 {
             width: 210px; height: 210px;
             border-left: 2px solid var(--neon-cyan);
             border-right: 2px solid transparent;
             animation: spinCCW 9s linear infinite;
         }
-
         .ring-3 {
             width: 175px; height: 175px;
             border: 1px solid rgba(188, 19, 254, 0.4);
             border-style: dotted;
             animation: spinCW 6s linear infinite;
         }
-
         .quantum-orb {
             width: 120px;
             height: 120px;
@@ -265,25 +249,20 @@ HTML_DASHBOARD = """
             transition: all 0.2s ease-out;
             position: relative;
         }
-
         .quantum-orb.speaking {
             animation: voicePulse 1.1s infinite ease-in-out;
             box-shadow: 0 0 85px var(--neon-cyan), 0 0 120px var(--neon-purple);
         }
-
         .quantum-orb.user-active {
             transform: scale(1.18);
             box-shadow: 0 0 95px #00ffcc, 0 0 130px var(--neon-cyan);
         }
-
         @keyframes spinCW { 100% { transform: rotate(360deg); } }
         @keyframes spinCCW { 100% { transform: rotate(-360deg); } }
-
         @keyframes voicePulse {
             0%, 100% { transform: scale(1); filter: brightness(1); }
             50% { transform: scale(1.15); filter: brightness(1.4); }
         }
-
         #actionCard {
             z-index: 10;
             width: 100%;
@@ -300,12 +279,10 @@ HTML_DASHBOARD = """
             box-shadow: 0 0 25px rgba(0, 243, 255, 0.2);
             animation: holoFadeIn 0.4s ease-out forwards;
         }
-
         @keyframes holoFadeIn {
             from { opacity: 0; transform: translateY(20px) scale(0.95); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
-
         #actionCard img {
             width: 100%;
             border-radius: 10px;
@@ -313,7 +290,6 @@ HTML_DASHBOARD = """
             object-fit: cover;
             border: 1px solid rgba(0, 243, 255, 0.4);
         }
-
         .holo-btn {
             font-family: 'Orbitron', sans-serif;
             font-size: 0.78rem;
@@ -327,7 +303,6 @@ HTML_DASHBOARD = """
             box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
             transition: all 0.2s;
         }
-
         #controls {
             z-index: 10;
             display: flex;
@@ -337,7 +312,6 @@ HTML_DASHBOARD = """
             width: 100%;
             max-width: 440px;
         }
-
         #statusLabel {
             font-size: 0.92rem;
             letter-spacing: 1px;
@@ -346,7 +320,6 @@ HTML_DASHBOARD = """
             text-shadow: 0 0 6px rgba(0, 243, 255, 0.2);
             text-align: center;
         }
-
         #callToggle {
             width: 78px;
             height: 78px;
@@ -363,7 +336,6 @@ HTML_DASHBOARD = """
             transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             outline: none;
         }
-
         #callToggle.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--danger-red));
             border-color: var(--danger-red);
@@ -534,4 +506,57 @@ HTML_DASHBOARD = """
             const array = new Uint8Array(raw.length);
             for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
             
-            const int16Array = new Int16
+            const int16Array = new Int16Array(array.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0;
+            }
+
+            const buffer = audioCtx.createBuffer(1, float32Array.length, 24000);
+            buffer.copyToChannel(float32Array, 0);
+            audioQueue.push(buffer);
+            if (!isPlaying) playQueue();
+        }
+
+        function playQueue() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                orb.classList.remove('speaking');
+                return;
+            }
+            isPlaying = true;
+            orb.classList.add('speaking');
+            const buffer = audioQueue.shift();
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            source.onended = playQueue;
+            source.start();
+        }
+
+        function showActionImage(url) {
+            actionCard.style.display = 'flex';
+            cardImage.src = url;
+            downloadBtn.href = url;
+        }
+
+        function jsonSafeParse(str) {
+            try { return JSON.parse(str); } catch(e) { return {}; }
+        }
+
+        function base64ArrayBuffer(arrayBuffer) {
+            let base64 = '';
+            const bytes = new Uint8Array(arrayBuffer);
+            const byteLength = bytes.byteLength;
+            for (let i = 0; i < byteLength; i++) {
+                base64 += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(base64);
+        }
+    </script>
+</body>
+</html>"""
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTML_DASHBOARD
