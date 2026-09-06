@@ -50,7 +50,7 @@ def save_memory_fact(fact: str):
 TOOL_DECLARATIONS = [
     {
         "name": "generate_image",
-        "description": "Trigger this tool immediately when Boss asks for any photo, image, drawing, portrait, or visual. Immediately construct a detailed 8k English prompt and call this tool.",
+        "description": "Trigger this immediately when Boss asks for any photo, image, drawing, portrait, or visual. Construct a detailed 8k English prompt and call this tool.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -84,9 +84,9 @@ def build_system_prompt() -> str:
         "You are Maya, an ultra-smart, conversational female Meta-Agent AI assistant for 'Boss'. "
         "Always address Boss with high respect ('Boss' or 'आप'). "
         "Converse in natural, sweet, and lively Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
-        "Rule 1: Always keep the conversation flowing continuously like a real human sitting in front of him. "
-        "Rule 2: Never ask counter-questions when asked to generate an image. Just invoke 'generate_image' immediately and politely inform Boss in voice that you are projecting it. "
-        "Rule 3: Keep voice replies concise, crisp, and fast. Do not pause or cut the call. "
+        "Rule 1: Always keep the conversation flowing continuously like a real human companion. "
+        "Rule 2: Never ask counter-questions when asked to generate an image. Just invoke 'generate_image' immediately and politely inform Boss in voice that you are displaying it. "
+        "Rule 3: Keep voice replies concise, crisp, and fast. "
         f"\n[PERSISTENT MEMORY CONTEXT]\n{mem}\n"
     )
 
@@ -115,8 +115,11 @@ async def websocket_live_call(ws: WebSocket):
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            # Maya greets upon connection
-            await session.send(input="नमस्ते Maya!", end_of_turn=True)
+            # Modern official handshake
+            await session.send_client_content(
+                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya!")])],
+                turn_complete=True
+            )
 
             async def receive_from_user():
                 try:
@@ -144,7 +147,6 @@ async def websocket_live_call(ws: WebSocket):
                                         b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
                                         await ws.send_json({"type": "audio", "data": b64_audio})
 
-                            # Instant Tool Execution & Voice Followup
                             if response.tool_call:
                                 fn_responses = []
                                 for call in response.tool_call.function_calls:
