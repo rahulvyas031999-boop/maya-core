@@ -40,9 +40,9 @@ SYSTEM_PROMPT = (
     "Always address the user with high respect as 'Boss' or 'आप'. "
     "Rule 1: Always converse in natural Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
     "Rule 2: Sound human, lively, warm, and loyal—like a futuristic AI companion speaking right in front of him. "
-    "Rule 3: Start the call by greeting Boss warmly and asking how you can assist him. "
-    "Rule 4: Keep listening actively. Never end the turn or disconnect until Boss ends the call. "
-    "Rule 5: Whenever Boss asks for an image, photo, or visual, invoke the 'generate_image' tool immediately and tell him politely in voice that you are projecting it on screen."
+    "Rule 3: Greet Boss immediately upon connection: 'नमस्ते Boss! मैं आपकी किस तरह सहायता कर सकती हूँ?' "
+    "Rule 4: Keep listening actively. Never disconnect the call until Boss ends it. "
+    "Rule 5: Whenever Boss asks for an image, invoke the 'generate_image' tool immediately and inform him politely in voice."
 )
 
 @app.websocket("/ws/live")
@@ -53,23 +53,22 @@ async def websocket_live_call(ws: WebSocket):
         await ws.close()
         return
 
-    # Despina Voice locked into speech config
-    live_config = types.LiveConnectConfig(
-        response_modalities=[types.Modality.AUDIO],
-        system_instruction=types.Content(parts=[types.Part(text=SYSTEM_PROMPT)]),
-        tools=[{"function_declarations": TOOL_DECLARATIONS}],
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name="Despina"
-                )
-            )
-        )
-    )
+    # Fail-safe speech config for Despina voice
+    live_config = {
+        "response_modalities": ["AUDIO"],
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "tools": [{"function_declarations": TOOL_DECLARATIONS}],
+        "speech_config": {
+            "voice_config": {
+                "prebuilt_voice_config": {
+                    "voice_name": "Despina"
+                }
+            }
+        }
+    }
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            # Maya initiates handshake greeting
             await session.send(input="नमस्ते Maya!", end_of_turn=True)
 
             async def receive_from_user():
@@ -159,7 +158,6 @@ HTML_DASHBOARD = """
             position: relative;
         }
 
-        /* Cyberpunk Grid Background */
         body::before {
             content: "";
             position: absolute;
@@ -172,7 +170,6 @@ HTML_DASHBOARD = """
             z-index: 1;
         }
 
-        /* Top Futuristic HUD Header */
         header {
             z-index: 10;
             width: 100%;
@@ -220,7 +217,6 @@ HTML_DASHBOARD = """
 
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-        /* 3D Holographic Core */
         #coreContainer {
             z-index: 10;
             position: relative;
@@ -232,7 +228,6 @@ HTML_DASHBOARD = """
             margin: auto 0;
         }
 
-        /* Sci-Fi Rotating Rings */
         .ring {
             position: absolute;
             border-radius: 50%;
@@ -261,7 +256,6 @@ HTML_DASHBOARD = """
             animation: spinCW 6s linear infinite;
         }
 
-        /* Central Glowing Orb */
         .quantum-orb {
             width: 120px;
             height: 120px;
@@ -290,7 +284,6 @@ HTML_DASHBOARD = """
             50% { transform: scale(1.15); filter: brightness(1.4); }
         }
 
-        /* Generated Action Card (Hologram Screen) */
         #actionCard {
             z-index: 10;
             width: 100%;
@@ -335,7 +328,6 @@ HTML_DASHBOARD = """
             transition: all 0.2s;
         }
 
-        /* Footer Control Deck */
         #controls {
             z-index: 10;
             display: flex;
@@ -355,7 +347,6 @@ HTML_DASHBOARD = """
             text-align: center;
         }
 
-        /* Cyberpunk Call Activation Button */
         #callToggle {
             width: 78px;
             height: 78px;
@@ -382,7 +373,6 @@ HTML_DASHBOARD = """
     </style>
 </head>
 <body>
-    <!-- Top Futuristic HUD -->
     <header>
         <div class="hud-title">MAYA <span style="color:var(--neon-cyan); font-size:0.85rem;">OS v2.5</span></div>
         <div class="hud-badge">
@@ -391,7 +381,6 @@ HTML_DASHBOARD = """
         </div>
     </header>
 
-    <!-- 3D Holographic Core Visualizer -->
     <div id="coreContainer">
         <div class="ring ring-1"></div>
         <div class="ring ring-2"></div>
@@ -399,13 +388,11 @@ HTML_DASHBOARD = """
         <div id="orb" class="quantum-orb"></div>
     </div>
 
-    <!-- Holographic Image Projection -->
     <div id="actionCard">
         <img id="cardImage" src="" alt="Neural Synthesized Visual" />
         <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD PROJECTION</a>
     </div>
 
-    <!-- Sci-Fi HUD Control Deck -->
     <div id="controls">
         <div id="statusLabel">NEURAL LINK IDLE // TAP BUTTON TO CONNECT</div>
         <button id="callToggle" onclick="toggleCall()">📞</button>
@@ -528,4 +515,23 @@ HTML_DASHBOARD = """
             while (offsetResult < result.length) {
                 const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
                 let accum = 0, count = 0;
-                for (let i = offsetBuffer; i < nextOffs
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                    accum += buffer[i];
+                    count++;
+                }
+                result[offsetResult] = count > 0 ? accum / count : 0;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
+        let audioQueue = [];
+        let isPlaying = false;
+
+        function playIncomingPcm(b64Audio) {
+            const raw = atob(b64Audio);
+            const array = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
+            
+            const int16Array = new Int16
