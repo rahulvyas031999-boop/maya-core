@@ -18,32 +18,78 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
+# --- LONG-TERM MEMORY ENGINE ---
+MEMORY_FILE = "maya_memory.json"
+
+def load_memory() -> str:
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                facts = data.get("facts", [])
+                if facts:
+                    return "PAST MEMORY OF BOSS:\n" + "\n".join([f"- {item}" for item in facts[-10:]])
+        except Exception:
+            pass
+    return "No prior memory recorded yet."
+
+def save_memory_fact(fact: str):
+    data = {"facts": []}
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {"facts": []}
+    data.setdefault("facts", []).append(fact)
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Memory save error: {e}")
+
 TOOL_DECLARATIONS = [
     {
         "name": "generate_image",
-        "description": "Call this tool whenever Boss asks to make, draw, render or generate a photo, image, or visual.",
+        "description": "Trigger this immediately whenever Boss wants an image, art, visual, or drawing. Do not ask counter-questions, generate creative prompt yourself.",
         "parameters": {
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "Highly detailed photorealistic English description of the image"
+                    "description": "Detailed English artistic visual description"
                 }
             },
             "required": ["prompt"]
         }
+    },
+    {
+        "name": "remember_fact",
+        "description": "Save an important fact, preference, task or personal detail about Boss into long-term memory.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "The exact fact, task, or preference to remember permanently"
+                }
+            },
+            "required": ["fact"]
+        }
     }
 ]
 
-SYSTEM_PROMPT = (
-    "You are Maya, an ultra-advanced, futuristic female Meta-Agent AI assistant. "
-    "Always address the user with high respect as 'Boss' or 'आप'. "
-    "Rule 1: Always converse in natural Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
-    "Rule 2: Sound human, lively, warm, and loyal—like a futuristic AI companion speaking right in front of him. "
-    "Rule 3: Greet Boss immediately upon connection: 'नमस्ते Boss! मैं आपकी किस तरह सहायता कर सकती हूँ?' "
-    "Rule 4: Keep listening actively. Never disconnect the call until Boss ends it. "
-    "Rule 5: Whenever Boss asks for an image, invoke the 'generate_image' tool immediately and inform him politely in voice."
-)
+def build_system_prompt() -> str:
+    mem = load_memory()
+    return (
+        "You are Maya, an ultra-fast, loyal female Meta-Agent AI assistant for 'Boss'. "
+        "Always address Boss with high respect ('Boss' or 'आप'). "
+        "Converse in natural Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'याद रखूँगी'). "
+        "Keep responses crisp, ultra-low latency and quick. "
+        "When Boss asks to make or draw an image, NEVER ask what style he wants—immediately generate a masterpiece prompt and call 'generate_image'. "
+        "When Boss tells you his plans, tasks, or preferences, invoke 'remember_fact' immediately so you never forget. "
+        f"\n[PERSISTENT MEMORY CONTEXT]\n{mem}\n"
+    )
 
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
@@ -53,62 +99,88 @@ async def websocket_live_call(ws: WebSocket):
         await ws.close()
         return
 
-    live_config = {
-        "response_modalities": ["AUDIO"],
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "tools": [{"function_declarations": TOOL_DECLARATIONS}],
-        "speech_config": {
-            "voice_config": {
-                "prebuilt_voice_config": {
-                    "voice_name": "Despina"
-                }
-            }
-        }
-    }
+    sys_prompt = build_system_prompt()
+
+    # Officially locked Despina voice using SDK types
+    live_config = types.LiveConnectConfig(
+        response_modalities=[types.Modality.AUDIO],
+          system_instruction=types.Content(parts=[types.Part(text=sys_prompt)]),
+        tools=[{"function_declarations": TOOL_DECLARATIONS}],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name="Despina"
+                )
+            )
+        )
+    )
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
             await session.send(input="नमस्ते Maya!", end_of_turn=True)
 
             async def receive_from_user():
-                while True:
-                    data = await ws.receive_text()
-                    msg = json.loads(data)
-                    if msg.get("type") == "audio":
-                        pcm_chunk = base64.b64decode(msg["data"])
-                        await session.send_realtime_input(
-                            audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
-                        )
+                try:
+                    while True:
+                        data = await ws.receive_text()
+                        msg = json.loads(data)
+                        if msg.get("type") == "audio":
+                            pcm_chunk = base64.b64decode(msg["data"])
+                            await session.send_realtime_input(
+                                audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
+                            )
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+                except Exception as err:
+                    print(f"Receive loop error: {err}")
 
             async def send_to_user():
-                while True:
-                    async for response in session.receive():
-                        server_content = response.server_content
-                        if server_content and server_content.model_turn:
-                            for part in server_content.model_turn.parts:
-                                if hasattr(part, "inline_data") and part.inline_data:
-                                    b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
-                                    await ws.send_json({"type": "audio", "data": b64_audio})
+                try:
+                    while True:
+                        async for response in session.receive():
+                            server_content = response.server_content
+                            if server_content and server_content.model_turn:
+                                for part in server_content.model_turn.parts:
+                                    if hasattr(part, "inline_data") and part.inline_data:
+                                        b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
+                                        await ws.send_json({"type": "audio", "data": b64_audio})
 
-                        tool_call = response.tool_call
-                        if tool_call:
-                            for call in tool_call.function_calls:
-                                if call.name == "generate_image":
-                                    prompt = call.args.get("prompt", "futuristic cyberpunk sci-fi 8k")
-                                    encoded = urllib.parse.quote(prompt)
-                                    img_url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
-                                    
-                                    await ws.send_json({"type": "image", "url": img_url, "prompt": prompt})
-                                    
-                                    await session.send_tool_response(
-                                        function_responses=[
+                            if response.tool_call:
+                                fn_responses = []
+                                for call in response.tool_call.function_calls:
+                                    if call.name == "generate_image":
+                                        prompt = call.args.get("prompt", "futuristic cyberpunk sci-fi masterpiece 8k")
+                                        encoded = urllib.parse.quote(prompt)
+                                        img_url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                                        await ws.send_json({"type": "image", "url": img_url, "prompt": prompt})
+                                        fn_responses.append(
                                             types.FunctionResponse(
                                                 id=call.id,
                                                 name=call.name,
-                                                response={"result": "Image synthesized and rendered on screen."}
+                                                response={"output": "Image rendered successfully and shown to Boss."}
                                             )
-                                        ]
-                                    )
+                                        )
+                                    elif call.name == "remember_fact":
+                                        fact = call.args.get("fact", "")
+                                        if fact:
+                                            save_memory_fact(fact)
+                                        fn_responses.append(
+                                            types.FunctionResponse(
+                                                id=call.id,
+                                                name=call.name,
+                                                response={"output": "Saved in Maya's long-term memory."}
+                                            )
+                                        )
+
+                                if fn_responses:
+                                    try:
+                                        await session.send_tool_response(function_responses=fn_responses)
+                                    except Exception as err:
+                                        print(f"Tool response send error: {err}")
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+                except Exception as err:
+                    print(f"Send loop error: {err}")
 
             await asyncio.gather(receive_from_user(), send_to_user())
 
@@ -133,10 +205,9 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         :root {
             --neon-cyan: #00f3ff;
             --neon-purple: #bc13fe;
-            --neon-blue: #0066ff;
             --danger-red: #ff0055;
             --dark-bg: #030611;
-            --glass-bg: rgba(6, 15, 37, 0.65);
+            --glass-bg: rgba(6, 15, 37, 0.7);
             --glass-border: rgba(0, 243, 255, 0.25);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -176,7 +247,6 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             border: 1px solid var(--glass-border);
             border-radius: 12px;
             backdrop-filter: blur(10px);
-            box-shadow: 0 0 20px rgba(0, 243, 255, 0.1);
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
@@ -219,7 +289,6 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         .ring {
             position: absolute;
             border-radius: 50%;
-            border: 1px dashed rgba(0, 243, 255, 0.35);
             pointer-events: none;
         }
         .ring-1 {
@@ -236,8 +305,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         }
         .ring-3 {
             width: 175px; height: 175px;
-            border: 1px solid rgba(188, 19, 254, 0.4);
-            border-style: dotted;
+            border: 1px dashed rgba(188, 19, 254, 0.4);
             animation: spinCW 6s linear infinite;
         }
         .quantum-orb {
@@ -246,8 +314,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, #ffffff, var(--neon-cyan) 40%, var(--neon-purple) 85%);
             box-shadow: 0 0 45px var(--neon-cyan), inset 0 0 20px #fff;
-            transition: all 0.2s ease-out;
-            position: relative;
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
         }
         .quantum-orb.speaking {
             animation: voicePulse 1.1s infinite ease-in-out;
@@ -277,11 +344,6 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             gap: 10px;
             backdrop-filter: blur(12px);
             box-shadow: 0 0 25px rgba(0, 243, 255, 0.2);
-            animation: holoFadeIn 0.4s ease-out forwards;
-        }
-        @keyframes holoFadeIn {
-            from { opacity: 0; transform: translateY(20px) scale(0.95); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
         }
         #actionCard img {
             width: 100%;
@@ -300,8 +362,6 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             border-radius: 8px;
             text-decoration: none;
             border: 1px solid var(--neon-cyan);
-            box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
-            transition: all 0.2s;
         }
         #controls {
             z-index: 10;
@@ -317,7 +377,6 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             letter-spacing: 1px;
             color: #8fa0bc;
             font-weight: 500;
-            text-shadow: 0 0 6px rgba(0, 243, 255, 0.2);
             text-align: center;
         }
         #callToggle {
@@ -333,14 +392,12 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            outline: none;
+            transition: all 0.2s ease;
         }
         #callToggle.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--danger-red));
             border-color: var(--danger-red);
             box-shadow: 0 0 40px rgba(255, 0, 85, 0.7);
-            transform: scale(0.96);
         }
     </style>
 </head>
@@ -349,7 +406,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         <div class="hud-title">MAYA <span style="color:var(--neon-cyan); font-size:0.85rem;">OS v2.5</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
-            <span id="hudVoice">VOICE: DESPINA</span>
+            <span>DESPINA // MEMORY ON</span>
         </div>
     </header>
 
@@ -361,12 +418,12 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     </div>
 
     <div id="actionCard">
-        <img id="cardImage" src="" alt="Neural Synthesized Visual" />
+        <img id="cardImage" src="" alt="Projection" />
         <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD PROJECTION</a>
     </div>
 
     <div id="controls">
-        <div id="statusLabel">NEURAL LINK IDLE // TAP BUTTON TO CONNECT</div>
+        <div id="statusLabel">NEURAL LINK IDLE // TAP TO CONNECT</div>
         <button id="callToggle" onclick="toggleCall()">📞</button>
     </div>
 
@@ -413,7 +470,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
                     isCalling = true;
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
-                    statusLabel.innerText = "NEURAL LINK ACTIVE // MAYA सुन रही है Boss...";
+                    statusLabel.innerText = "NEURAL LINK ACTIVE // Maya सुन रही है Boss...";
                     startMicrophoneStream(micStream);
                 };
 
@@ -431,7 +488,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
                 ws.onerror = () => stopLiveCall();
 
             } catch (err) {
-                alert("Neural Link Access Error: " + err);
+                alert("Microphone Error: " + err);
             }
         }
 
@@ -449,7 +506,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
         function startMicrophoneStream(stream) {
             const source = audioCtx.createMediaStreamSource(stream);
-            processor = audioCtx.createScriptProcessor(4096, 1, 1);
+            processor = audioCtx.createScriptProcessor(2048, 1, 1);
             source.connect(processor);
             processor.connect(audioCtx.destination);
 
