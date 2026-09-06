@@ -16,7 +16,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-# Gemini Client setup with v1alpha for Live WebSocket
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 TOOL_DECLARATIONS = [
@@ -59,7 +58,6 @@ async def websocket_live_call(ws: WebSocket):
     )
 
     try:
-        # Correct official model for bidiGenerateContent / Live API
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
             
             async def receive_from_user():
@@ -72,6 +70,8 @@ async def websocket_live_call(ws: WebSocket):
                             await session.send_realtime_input(
                                 audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
                             )
+                        elif msg.get("type") == "text":
+                            await session.send_realtime_input(text=msg["data"])
                 except (WebSocketDisconnect, asyncio.CancelledError):
                     pass
                 except Exception as err:
@@ -87,7 +87,6 @@ async def websocket_live_call(ws: WebSocket):
                                     b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
                                     await ws.send_json({"type": "audio", "data": b64_audio})
 
-                        # Tool Handling
                         tool_call = response.tool_call
                         if tool_call:
                             for call in tool_call.function_calls:
@@ -152,7 +151,7 @@ HTML_DASHBOARD = """
         #controls { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; flex-shrink: 0; }
         #callToggle { width: 72px; height: 72px; border-radius: 50%; background: #238636; border: none; color: #fff; font-size: 1.8rem; cursor: pointer; box-shadow: 0 8px 24px rgba(35, 134, 54, 0.4); display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
         #callToggle.active { background: var(--red); box-shadow: 0 8px 24px rgba(255, 75, 43, 0.5); }
-        #statusLabel { font-size: 0.9rem; color: #7d8b99; }
+        #statusLabel { font-size: 0.9rem; color: #7d8b99; text-align: center; }
     </style>
 </head>
 <body>
@@ -195,8 +194,19 @@ HTML_DASHBOARD = """
 
         async function startLiveCall() {
             try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-                micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, sampleRate: 16000 } });
+                // AudioContext initialized upon user touch event
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
 
                 const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${proto}//${window.location.host}/ws/live`);
@@ -207,11 +217,15 @@ HTML_DASHBOARD = """
                     document.getElementById('callToggle').innerText = '🛑';
                     statusLabel.innerText = "Maya सुन रही है Boss...";
                     startMicrophoneStream(micStream);
+
+                    // Send initial handshake trigger so Maya greets first
+                    ws.send(JSON.stringify({ type: 'text', data: "नमस्ते Maya! Boss ऑनलाइन आ चुके हैं, उनका अभिवादन कीजिए।" }));
                 };
 
                 ws.onmessage = async (e) => {
                     const msg = jsonSafeParse(e.data);
                     if (msg.type === 'audio') {
+                        if (audioCtx.state === 'suspended') await audioCtx.resume();
                         playIncomingPcm(msg.data);
                     } else if (msg.type === 'image') {
                         showActionImage(msg.url);
@@ -241,7 +255,7 @@ HTML_DASHBOARD = """
 
         function startMicrophoneStream(stream) {
             const source = audioCtx.createMediaStreamSource(stream);
-            processor = audioCtx.createScriptProcessor(2048, 1, 1);
+            processor = audioCtx.createScriptProcessor(4096, 1, 1);
             source.connect(processor);
             processor.connect(audioCtx.destination);
 
@@ -252,20 +266,43 @@ HTML_DASHBOARD = """
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
                 let rms = Math.sqrt(sum / inputData.length);
-                if (rms > 0.04) {
+                if (rms > 0.03) {
                     orb.classList.add('user-active');
                 } else {
                     orb.classList.remove('user-active');
                 }
 
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    let s = Math.max(-1, Math.min(1, inputData[i]));
+                // Downsample browser mic buffer to standard 16000Hz PCM
+                const downsampled = downsampleTo16k(inputData, audioCtx.sampleRate);
+                const pcm16 = new Int16Array(downsampled.length);
+                for (let i = 0; i < downsampled.length; i++) {
+                    let s = Math.max(-1, Math.min(1, downsampled[i]));
                     pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
                 const b64Data = base64ArrayBuffer(pcm16.buffer);
                 ws.send(JSON.stringify({ type: 'audio', data: b64Data }));
             };
+        }
+
+        function downsampleTo16k(buffer, sampleRate) {
+            if (sampleRate === 16000) return buffer;
+            const ratio = sampleRate / 16000;
+            const newLength = Math.round(buffer.length / ratio);
+            const result = new Float32Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+                let accum = 0, count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                    accum += buffer[i];
+                    count++;
+                }
+                result[offsetResult] = count > 0 ? accum / count : 0;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
         }
 
         let audioQueue = [];
@@ -282,6 +319,7 @@ HTML_DASHBOARD = """
                 float32Array[i] = int16Array[i] / 32768.0;
             }
 
+            // Gemini Native Audio delivers at 24000Hz
             const buffer = audioCtx.createBuffer(1, float32Array.length, 24000);
             buffer.copyToChannel(float32Array, 0);
             audioQueue.push(buffer);
