@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MAYA // NEURAL OS</title>
+    <title>MAYA // SOVEREIGN OS</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -164,13 +164,13 @@
             max-width: 420px;
         }
         #statusLabel {
-            font-size: 0.92rem;
+            font-size: 0.95rem;
             letter-spacing: 0.5px;
-            color: #8fa0bc;
+            color: #d1e8ff;
             font-weight: 600;
             text-align: center;
             min-height: 24px;
-            max-width: 360px;
+            max-width: 380px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -199,10 +199,10 @@
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">SOVEREIGN v2.6</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">NEURAL v3.0</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
-            <span id="pingHud">LINK OK // DESPINA</span>
+            <span id="pingHud">AZURE // SWARA</span>
         </div>
     </header>
 
@@ -227,7 +227,6 @@
 
     <script>
         let ws = null;
-        let audioCtx = null;
         let mediaStream = null;
         let mediaRecorder = null;
         let audioChunks = [];
@@ -253,9 +252,6 @@
 
         async function startLiveCall() {
             try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-                if (audioCtx.state === 'suspended') await audioCtx.resume();
-
                 const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${proto}//${window.location.host}/ws/live`);
 
@@ -270,14 +266,13 @@
                 ws.onmessage = async (e) => {
                     const msg = JSON.parse(e.data);
                     if (msg.type === 'audio') {
-                        if (audioCtx.state === 'suspended') await audioCtx.resume();
-                        playIncomingPcm(msg.data);
+                        playIncomingAudio(msg.data);
                     } else if (msg.type === 'transcript') {
                         statusLabel.innerText = `Boss: "${msg.text}"`;
+                    } else if (msg.type === 'reply_text') {
+                        statusLabel.innerText = `Maya: "${msg.text}"`;
                     } else if (msg.type === 'image') {
                         showActionImage(msg.url);
-                    } else if (msg.type === 'close_image') {
-                        closeActionCard();
                     } else if (msg.type === 'ping') {
                         const pingMs = Math.round((Date.now() - (msg.timestamp * 1000)));
                         pingHud.innerText = `PING: ${Math.max(10, pingMs)}ms`;
@@ -340,24 +335,20 @@
 
                 mediaRecorder.start();
 
-                // Smart VAD Loop (Silent threshold auto-detection)
+                // Zero-Beep Smart VAD Loop
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 function monitorAudio() {
                     if (!isCalling) return;
                     analyser.getByteFrequencyData(dataArray);
 
                     let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) {
-                        sum += dataArray[i];
-                    }
+                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let avg = sum / dataArray.length;
 
-                    // आवाज़ की पहचान होने पर Orb रिएक्ट करेगा
                     if (avg > 14 && !isMayaSpeaking) {
                         orb.classList.add('user-active');
                         clearTimeout(silenceTimer);
 
-                        // 650ms की खामोशी आते ही तुरंत ऑडियो चंक सर्वर पर भेजा जाएगा
                         silenceTimer = setTimeout(() => {
                             orb.classList.remove('user-active');
                             if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -393,47 +384,22 @@
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
-            }
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
         }
 
-        let audioQueue = [];
-        let isPlaying = false;
-
-        function playIncomingPcm(b64Audio) {
-            const raw = atob(b64Audio);
-            const array = new Uint8Array(raw.length);
-            for (let i = 0; i < raw.length; i++) array[i] = raw.charCodeAt(i);
-
-            const int16Array = new Int16Array(array.buffer);
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                float32Array[i] = int16Array[i] / 32768.0;
-            }
-
-            const buffer = audioCtx.createBuffer(1, float32Array.length, 24000);
-            buffer.copyToChannel(float32Array, 0);
-            audioQueue.push(buffer);
-            if (!isPlaying) playQueue();
-        }
-
-        function playQueue() {
-            if (audioQueue.length === 0) {
-                isPlaying = false;
-                isMayaSpeaking = false;
-                orb.classList.remove('speaking');
-                return;
-            }
-            isPlaying = true;
+        function playIncomingAudio(b64Audio) {
             isMayaSpeaking = true;
             orb.classList.add('speaking');
-            const buffer = audioQueue.shift();
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.onended = playQueue;
-            source.start();
+            const audio = new Audio("data:audio/mp3;base64," + b64Audio);
+            audio.onended = () => {
+                isMayaSpeaking = false;
+                orb.classList.remove('speaking');
+            };
+            audio.onerror = () => {
+                isMayaSpeaking = false;
+                orb.classList.remove('speaking');
+            };
+            audio.play().catch(e => console.log("Playback error:", e));
         }
 
         function showActionImage(url) {
