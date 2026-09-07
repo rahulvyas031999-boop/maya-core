@@ -10,7 +10,7 @@ import httpx
 import edge_tts
 from typing import Dict, Any, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from groq import Groq
 from google import genai
 from google.genai import types
@@ -20,7 +20,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 # Real ReAct Autonomous Engine
 from agent_loop import run_react_agent
 
-# Step 4: Persistent SQLite Job Queue Engine
+# Persistent SQLite Queue
 from task_queue import (
     create_task,
     append_modification,
@@ -30,6 +30,9 @@ from task_queue import (
     get_active_tasks_summary,
     get_unprocessed_tasks
 )
+
+# Step 5: Workspace Artifact Manager
+from workspace_manager import list_artifacts, get_workspace_path, WORKSPACE_DIR
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
@@ -70,19 +73,34 @@ def save_boss_chat_id(chat_id: str):
     data["boss_chat_id"] = str(chat_id)
     save_json(STATE_FILE, data)
 
-# --- Cross-Platform Unified Dispatcher ---
-async def dispatch_to_telegram(text: str = None, photo_url: str = None, caption: str = ""):
+# --- Cross-Platform Unified Dispatcher (With Actual File Attachments) ---
+async def dispatch_to_telegram(text: str = None, photo_url: str = None, document_path: str = None, caption: str = ""):
     chat_id = get_boss_chat_id()
     if not chat_id or not TELEGRAM_BOT_TOKEN:
         return
     async with httpx.AsyncClient() as client:
         try:
+            # 1. Send Photo
             if photo_url:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
                     json={"chat_id": chat_id, "photo": photo_url, "caption": caption or "✨ Visual Delivery"},
                     timeout=15.0
                 )
+            
+            # 2. Send Actual Document / Code File Attachment
+            if document_path and os.path.exists(document_path):
+                file_name = os.path.basename(document_path)
+                with open(document_path, "rb") as f:
+                    files = {"document": (file_name, f.read())}
+                    await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+                        data={"chat_id": chat_id, "caption": caption or f"📁 Generated File: {file_name}"},
+                        files=files,
+                        timeout=30.0
+                    )
+
+            # 3. Send Text
             if text:
                 chunks = [text[i:i+3800] for i in range(0, len(text), 3800)] if len(text) > 4000 else [text]
                 for ch in chunks:
@@ -94,15 +112,13 @@ async def dispatch_to_telegram(text: str = None, photo_url: str = None, caption:
         except Exception as e:
             print(f"[TELEGRAM DISPATCH ERROR]: {e}")
 
-# --- Autonomous Persistent Worker (SQLite + ReAct) ---
+# --- Autonomous Persistent Worker (ReAct + Workspace Dispatch) ---
 async def run_autonomous_worker(task_id: str, initial_prompt: str):
     print(f"[PERSISTENT WORKER] Task {task_id} running from SQLite queue: {initial_prompt}")
     update_task_status(task_id, "processing")
 
-    # शुरूआती वॉइस बातचीत के लिए 4 सेकंड का बफर
     await asyncio.sleep(4)
 
-    # SQLite से ताज़ा डेटा (सहित लाइव कॉल मॉडिफिकेशन्स) पढ़ना
     task_info = get_task(task_id)
     mods = task_info.get("modifications", []) if task_info else []
 
@@ -110,22 +126,32 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
     if mods:
         full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
 
-    # ReAct एजेंट लूप से एक्जीक्यूट करें (Web Search, File I/O)
+    # ReAct एजेंट लूप से एक्जीक्यूट करें (Web Search, File I/O in workspace)
     final_delivery = await run_react_agent(full_spec)
 
-    # SQLite में टास्क को 'completed' मार्क करें
+    # Mark completed in SQLite
     update_task_status(task_id, "completed", final_delivery)
 
-    # 1. Telegram Dispatch
+    # 1. Telegram Text Report Dispatch
     report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
     await dispatch_to_telegram(text=report_msg)
 
-    # 2. Live WebSocket Push Alert
+    # 2. Check and Dispatch Any Newly Generated File
+    all_files = list_artifacts()
+    if all_files:
+        latest_file = all_files[-1]
+        actual_file_path = get_workspace_path(latest_file["relative_path"])
+        await dispatch_to_telegram(
+            document_path=actual_file_path, 
+            caption=f"📁 Boss, यहाँ आपकी जनरेटेड फ़ाइल है: {latest_file['filename']}"
+        )
+
+    # 3. Live WebSocket Push Alert
     for ws in ACTIVE_WEBSOCKETS:
         try:
             await ws.send_json({
                 "type": "reply_text",
-                "text": f"Boss, टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। रिपोर्ट टेलीग्राम पर भेज दी है।"
+                "text": f"Boss, टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। फ़ाइल और रिपोर्ट टेलीग्राम पर भेज दी है।"
             })
         except Exception:
             pass
@@ -260,7 +286,7 @@ async def run_telegram_gateway():
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
 
-# --- Render Never-Sleep Watchdog & Crash Recovery ---
+# --- Render Watchdog & Crash Recovery ---
 @app.on_event("startup")
 async def startup():
     async def self_ping():
@@ -279,7 +305,7 @@ async def startup():
     if TELEGRAM_BOT_TOKEN:
         asyncio.create_task(run_telegram_gateway())
 
-    # Crash Recovery: सर्वर रीस्टार्ट होने पर पेंडिंग टास्क्स को SQLite से दोबारा उठाना
+    # Crash Recovery: अधूरे टास्क्स को दोबारा उठाना
     unprocessed = get_unprocessed_tasks()
     for t in unprocessed:
         print(f"[RECOVERY] Resuming interrupted task: {t['task_id']}")
@@ -290,7 +316,24 @@ async def health():
     active_count = len(get_active_tasks_summary())
     return {"status": "Sovereign Master Active", "active_tasks_count": active_count}
 
-# --- WebSocket Live Voice ---
+# --- Step 5: Artifacts Live Viewer & Downloader Endpoints ---
+@app.get("/artifacts")
+async def get_artifacts_list():
+    """Workspace की सभी फाइल्स की लाइव JSON लिस्ट"""
+    return {"workspace_files": list_artifacts()}
+
+@app.get("/artifacts/{file_path:path}")
+async def download_or_view_artifact(file_path: str):
+    """File को डायरेक्ट ब्राउज़र में लाइव प्रिव्यू या डाउनलोड करने के लिए"""
+    try:
+        safe_path = get_workspace_path(file_path)
+        if os.path.exists(safe_path) and os.path.isfile(safe_path):
+            return FileResponse(safe_path)
+        return {"error": "File not found in workspace"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- WebSocket Live Voice Link ---
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
     await ws.accept()
