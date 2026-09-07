@@ -236,16 +236,42 @@ async def run_telegram_gateway():
         save_boss_chat_id(str(chat_id))
         text = update.message.text
 
-        if groq_client:
-            chat_completion = groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": build_system_prompt()},
-                    {"role": "user", "content": text}
-                ],
-                model="llama-3.3-70b-versatile"
-            )
-            reply = chat_completion.choices[0].message.content
+        reply = ""
+
+        # Engine 1: Verified Production Gemini (gemini-3.6-flash)
+        if gemini_client:
+            try:
+                response = gemini_client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=text,
+                    config=types.GenerateContentConfig(
+                        system_instruction=build_system_prompt()
+                    )
+                )
+                if response and hasattr(response, "text") and response.text:
+                    reply = response.text
+            except Exception as e:
+                print(f"[ERROR] Gemini Chat Failed: {e}")
+
+        # Engine 2: Verified Production Groq (openai/gpt-oss-20b)
+        if not reply and groq_client:
+            try:
+                chat_completion = groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": build_system_prompt()},
+                        {"role": "user", "content": text}
+                    ],
+                    model="openai/gpt-oss-20b"
+                )
+                reply = chat_completion.choices[0].message.content
+            except Exception as e:
+                print(f"[ERROR] Groq Chat Failed: {e}")
+
+        # Telegram Message Delivery
+        if reply:
             await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text("Boss, response generate karne me samasya aayi. Kripya dobara prayaas karein.")
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
