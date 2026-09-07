@@ -102,14 +102,11 @@ def save_boss_chat_id(chat_id: str):
 # --- Background Task Orchestrator ---
 async def execute_background_task(task_description: str):
     print(f"[ORCHESTRATOR] Starting background execution for: {task_description}")
-    
-    # Simulating dynamic autonomous workflow (Website build, Research, Code verification)
     await asyncio.sleep(8)
     
     summary = f"Project '{task_description}' successfully created, compiled, and verified."
     record_completed_task(task_description, summary)
 
-    # Dispatch notification to Boss on Telegram
     chat_id = get_boss_chat_id()
     if chat_id and TELEGRAM_BOT_TOKEN:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -251,17 +248,21 @@ async def run_telegram_gateway():
                 if response and hasattr(response, "text") and response.text:
                     reply = response.text
             except Exception as e:
-                print(f"[ERROR] Gemini Chat Failed: {e}")
+                print(f"[FALLBACK TRIGGER] Gemini unavailable: {e}, falling back to Groq...")
 
         # Engine 2: Verified Production Groq (openai/gpt-oss-20b)
         if not reply and groq_client:
             try:
-                chat_completion = groq_client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": build_system_prompt()},
-                        {"role": "user", "content": text}
-                    ],
-                    model="openai/gpt-oss-20b"
+                loop = asyncio.get_running_loop()
+                chat_completion = await loop.run_in_executor(
+                    None,
+                    lambda: groq_client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": build_system_prompt()},
+                            {"role": "user", "content": text}
+                        ],
+                        model="openai/gpt-oss-20b"
+                    )
                 )
                 reply = chat_completion.choices[0].message.content
             except Exception as e:
@@ -271,14 +272,15 @@ async def run_telegram_gateway():
         if reply:
             await update.message.reply_text(reply)
         else:
-            await update.message.reply_text("Boss, response generate karne me samasya aayi. Kripya dobara prayaas karein.")
+            await update.message.reply_text("Boss, दोनों AI इंजन इस समय व्यस्त हैं। कृपया थोड़ी देर में पुनः प्रयास करें।")
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
+    # Conflicts रोकने के लिए drop_pending_updates चालू रखा गया है
+    await application.updater.start_polling(drop_pending_updates=True)
 
 # --- WebSocket Live Call Link (Web Dashboard) ---
 @app.websocket("/ws/live")
@@ -303,7 +305,6 @@ async def websocket_live_call(ws: WebSocket):
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            # Welcome handshake
             await session.send_client_content(
                 turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya! कॉल कनेक्ट हो चुकी है, छोटा सा स्वागत कीजिये।")])],
                 turn_complete=True
@@ -332,19 +333,26 @@ async def websocket_live_call(ws: WebSocket):
                                     turn_complete=True
                                 )
                         elif msg_type == "audio_blob" and groq_client:
-                            wav_bytes = base64.b64decode(msg.get("data"))
-                            audio_file = io.BytesIO(wav_bytes)
-                            audio_file.name = "audio.wav"
-                            transcription = groq_client.audio.transcriptions.create(
-                                file=audio_file, model="whisper-large-v3", language="hi"
-                            )
-                            user_text = transcription.text.strip()
-                            if user_text:
-                                await ws.send_json({"type": "transcript", "text": user_text})
-                                await session.send_client_content(
-                                    turns=[types.Content(role="user", parts=[types.Part(text=user_text)])],
-                                    turn_complete=True
+                            try:
+                                wav_bytes = base64.b64decode(msg.get("data"))
+                                audio_file = io.BytesIO(wav_bytes)
+                                audio_file.name = "audio.wav"
+                                loop = asyncio.get_running_loop()
+                                transcription = await loop.run_in_executor(
+                                    None,
+                                    lambda: groq_client.audio.transcriptions.create(
+                                        file=audio_file, model="whisper-large-v3", language="hi"
+                                    )
                                 )
+                                user_text = transcription.text.strip()
+                                if user_text:
+                                    await ws.send_json({"type": "transcript", "text": user_text})
+                                    await session.send_client_content(
+                                        turns=[types.Content(role="user", parts=[types.Part(text=user_text)])],
+                                        turn_complete=True
+                                    )
+                            except Exception as audio_err:
+                                print(f"[AUDIO] Transcription error: {audio_err}")
                 except Exception:
                     pass
 
