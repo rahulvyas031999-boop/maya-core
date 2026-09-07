@@ -275,17 +275,35 @@ async def run_telegram_gateway():
         chat_id = update.effective_chat.id
         save_boss_chat_id(str(chat_id))
         text = update.message.text.strip()
-
-        # Check if query requests background task/research
         lower_text = text.lower()
-        if any(w in lower_text for w in ["background", "बैकग्राउंड", "रिसर्च करो", "research karo", "banao", "create website", "project"]):
+
+        # 1. Direct Telegram Image Generation Engine
+        image_triggers = ["image", "photo", "tasveer", "चित्र", "picture", "wallpaper"]
+        action_triggers = ["banao", "generate", "create", "dikhao", "send"]
+        if any(t in lower_text for t in image_triggers) and any(a in lower_text for a in action_triggers):
+            await update.message.reply_text("Boss, इमेज रेंडर हो रही है, बस कुछ सेकंड...")
+            clean_prompt = text
+            for w in ["maya", "generate karo", "generate", "image", "photo", "banao", "ek", "ki"]:
+                clean_prompt = clean_prompt.replace(w, "").replace(w.capitalize(), "")
+            clean_prompt = clean_prompt.strip() or text
+            encoded_prompt = urllib.parse.quote(clean_prompt)
+            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+            try:
+                await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, आपकी इमेज तैयार है!\n\n🎯 Prompt: {text}")
+            except Exception as e:
+                print(f"[IMAGE ERROR] Direct send failed, sending fallback link: {e}")
+                await update.message.reply_text(f"Boss, डायरेक्ट फोटो सेंड करने में समस्या आई, यह रहा आपका इमेज लिंक:\n{img_url}")
+            return
+
+        # 2. Autonomous Background Task Handler
+        if any(w in lower_text for w in ["background", "बैकग्राउंड", "रिसर्च करो", "research karo", "create website", "project"]):
             asyncio.create_task(execute_background_task(text))
-            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिसर्च और रिपोर्ट तैयार होते ही मैं इसी चैट में आपको अलर्ट भेजती हूँ।")
+            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिसर्च और रिपोर्ट तैयार होते ही इसी चैट में अलर्ट भेजती हूँ।")
             return
 
         reply = ""
 
-        # Engine 1: Verified Production Gemini (gemini-3.6-flash)
+        # 3. Direct Fast Response (Gemini 3.6 Flash -> Groq openai/gpt-oss-20b)
         if gemini_client:
             try:
                 response = gemini_client.models.generate_content(
@@ -300,7 +318,6 @@ async def run_telegram_gateway():
             except Exception as e:
                 print(f"[FALLBACK TRIGGER] Gemini error: {e}, falling back to Groq...")
 
-        # Engine 2: Verified Production Groq (openai/gpt-oss-20b)
         if not reply and groq_client:
             try:
                 loop = asyncio.get_running_loop()
@@ -329,7 +346,6 @@ async def run_telegram_gateway():
 
     await application.initialize()
     await application.start()
-    # Conflict एरर से बचने के लिए drop_pending_updates चालू रखा गया है
     await application.updater.start_polling(drop_pending_updates=True)
 
 # --- WebSocket Live Call Link (Web Dashboard) ---
