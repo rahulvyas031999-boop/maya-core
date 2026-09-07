@@ -6,6 +6,7 @@ import base64
 import asyncio
 import urllib.parse
 import httpx
+import edge_tts
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from groq import Groq
@@ -34,8 +35,7 @@ def load_memory() -> str:
     if os.path.exists(MEMORY_FILE):
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                facts = data.get("facts", [])
+                facts = json.load(f).get("facts", [])
                 if facts:
                     return "PAST MEMORY OF BOSS:\n" + "\n".join([f"- {item}" for item in facts[-10:]])
         except Exception:
@@ -100,30 +100,55 @@ def save_boss_chat_id(chat_id: str):
     except Exception as e:
         print(f"Chat ID save error: {e}")
 
-# --- Autonomous Background Task Engine ---
-async def execute_background_task(task_description: str):
-    print(f"[ORCHESTRATOR] Autonomous execution started: {task_description}")
-    
-    generated_report = ""
-    prompt = (
-        f"You are Maya, an ultra-intelligent, professional sovereign AI meta-agent for Boss.\n"
-        f"Assignment: {task_description}\n"
-        f"Provide a comprehensive, high-value, deeply researched, professional executive report in crisp, natural Hindi/Hinglish."
+def build_system_prompt() -> str:
+    mem = load_memory()
+    last_task = get_last_completed_task()
+    return (
+        "You are Maya, an ultra-intelligent, sovereign female AI Meta-Agent for 'Boss'. "
+        "Converse in natural, sweet, crisp Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बताती हूँ'). "
+        "PRIMARY PROTOCOLS: "
+        "1. Active Voice Link: Keep replies very crisp, punchy, and conversational (1-2 lines maximum for speaking). "
+        "2. Never use robotic greetings repeatedly. Address Boss with high respect and energy. "
+        f"\n[PERSISTENT MEMORY]\n{mem}\n"
+        f"\n[BACKGROUND STATUS]\n{last_task}\n"
     )
 
-    # 1. Primary Generation: Gemini 3.6 Flash
+# --- Free Edge-TTS Neural Voice Engine ---
+async def generate_neural_speech(text: str) -> str:
+    """Microsoft Azure Neural Voice - Free & Unlimited"""
+    try:
+        clean_text = text.replace("*", "").replace("#", "").replace("`", "")
+        communicate = edge_tts.Communicate(clean_text, voice="hi-IN-SwaraNeural")
+        audio_stream = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_stream.write(chunk["data"])
+        return base64.b64encode(audio_stream.getvalue()).decode("utf-8")
+    except Exception as e:
+        print(f"[EDGE-TTS ERROR]: {e}")
+        return ""
+
+# --- Autonomous Background Task Engine ---
+async def execute_background_task(task_description: str):
+    print(f"[ORCHESTRATOR] Background task started: {task_description}")
+    generated_report = ""
+    prompt = (
+        f"You are Maya, an ultra-intelligent, professional AI Meta-Agent for Boss.\n"
+        f"Assignment: {task_description}\n"
+        f"Provide a comprehensive, high-value, deeply researched executive report in crisp, natural Hindi/Hinglish."
+    )
+
     if gemini_client:
         try:
             res = gemini_client.models.generate_content(
-                model="gemini-3.6-flash",
+                model="gemini-2.5-flash",
                 contents=prompt
             )
             if res and hasattr(res, "text") and res.text:
                 generated_report = res.text
         except Exception as e:
-            print(f"[ORCHESTRATOR] Gemini primary task execution error: {e}")
+            print(f"[ORCHESTRATOR] Gemini task error: {e}")
 
-    # 2. Fallback Generation: Groq openai/gpt-oss-20b
     if not generated_report and groq_client:
         try:
             loop = asyncio.get_running_loop()
@@ -131,7 +156,7 @@ async def execute_background_task(task_description: str):
                 None,
                 lambda: groq_client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are Maya executing an autonomous background report for Boss. Write in Hindi/Hinglish."},
+                        {"role": "system", "content": "You are Maya executing an autonomous report for Boss. Write in Hindi/Hinglish."},
                         {"role": "user", "content": task_description}
                     ],
                     model="openai/gpt-oss-20b"
@@ -139,10 +164,10 @@ async def execute_background_task(task_description: str):
             )
             generated_report = chat.choices[0].message.content
         except Exception as e:
-            print(f"[ORCHESTRATOR] Groq fallback task execution error: {e}")
+            print(f"[ORCHESTRATOR] Groq task error: {e}")
 
     if not generated_report:
-        generated_report = "Boss, टास्क प्रोसेस करने में तकनीकी समस्या आई। कृपया पुनः कमांड दें।"
+        generated_report = "Boss, टास्क प्रोसेस करने में समस्या आई।"
 
     summary = generated_report[:150] + "..."
     record_completed_task(task_description, summary)
@@ -151,7 +176,6 @@ async def execute_background_task(task_description: str):
     if chat_id and TELEGRAM_BOT_TOKEN:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         message_text = f"🚨 **TASK COMPLETED, BOSS!**\n\n🎯 **Task:** `{task_description}`\n\n📋 **Report:**\n\n{generated_report}"
-        
         chunks = [message_text[i:i+3800] for i in range(0, len(message_text), 3800)] if len(message_text) > 4000 else [message_text]
 
         async with httpx.AsyncClient() as client:
@@ -160,80 +184,6 @@ async def execute_background_task(task_description: str):
                     await client.post(url, json={"chat_id": chat_id, "text": ch}, timeout=15.0)
                 except Exception as err:
                     print(f"Telegram report delivery error: {err}")
-
-# --- Tool Declarations (Function Calling) ---
-TOOL_DECLARATIONS = [
-    {
-        "name": "start_background_task",
-        "description": "Trigger this when Boss gives an extensive task like creating a website, app, market research, or code fix that requires background processing.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task_description": {
-                    "type": "string",
-                    "description": "Clear detailed objective of the task"
-                }
-            },
-            "required": ["task_description"]
-        }
-    },
-    {
-        "name": "generate_image",
-        "description": "Trigger this immediately when Boss requests an image or artwork.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Artistic visual English prompt"
-                }
-            },
-            "required": ["prompt"]
-        }
-    },
-    {
-        "name": "close_image",
-        "description": "Trigger this when Boss asks to remove or close the image on screen.",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
-    },
-    {
-        "name": "remember_fact",
-        "description": "Store personal preferences, facts, or instructions given by Boss into long-term memory.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "fact": {"type": "string", "description": "The fact to remember"}
-            },
-            "required": ["fact"]
-        }
-    },
-    {
-        "name": "system_diagnostics",
-        "description": "Trigger this when Boss asks 'kya problem hai', 'status check karo', 'sab theek hai kya', or reports lag/slowness.",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
-    }
-]
-
-def build_system_prompt() -> str:
-    mem = load_memory()
-    last_task = get_last_completed_task()
-    return (
-        "You are Maya, an ultra-intelligent, sovereign female AI Meta-Agent for 'Boss'. "
-        "Converse in natural, sweet, crisp Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बताती हूँ'). "
-        "PRIMARY PROTOCOLS: "
-        "1. Real-time active voice/chat link: Give sharp, intelligent, natural answers without robotic hesitation. "
-        "2. When asked for an image, invoke 'generate_image'. "
-        "3. When asked to close an image, invoke 'close_image'. "
-        "4. When Boss asks about system health, invoke 'system_diagnostics'. "
-        f"\n[PERSISTENT MEMORY]\n{mem}\n"
-        f"\n[BACKGROUND STATUS]\n{last_task}\n"
-    )
 
 # --- Render Sleep-Proof Watchdog ---
 @app.on_event("startup")
@@ -250,7 +200,6 @@ async def startup_event():
             await asyncio.sleep(300)
 
     asyncio.create_task(self_ping())
-    
     if TELEGRAM_BOT_TOKEN:
         asyncio.create_task(run_telegram_gateway())
 
@@ -266,7 +215,7 @@ async def run_telegram_gateway():
     async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         save_boss_chat_id(str(chat_id))
-        await update.message.reply_text("नमस्ते Boss! Maya Sovereign Link स्थापित हो चुका है। अब बैकग्राउंड में चलने वाले सभी टास्क्स की लाइव रिपोर्ट आपको यहाँ मिलती रहेगी।")
+        await update.message.reply_text("नमस्ते Boss! Maya Sovereign Link स्थापित हो चुका है।")
 
     async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -274,7 +223,7 @@ async def run_telegram_gateway():
         text = update.message.text.strip()
         lower_text = text.lower()
 
-        # 1. Direct Telegram Image Generation Engine
+        # Image Handling
         image_triggers = ["image", "photo", "tasveer", "चित्र", "picture", "wallpaper"]
         action_triggers = ["banao", "generate", "create", "dikhao", "send"]
         if any(t in lower_text for t in image_triggers) and any(a in lower_text for a in action_triggers):
@@ -283,37 +232,32 @@ async def run_telegram_gateway():
             for w in ["maya", "generate karo", "generate", "image", "photo", "banao", "ek", "ki"]:
                 clean_prompt = clean_prompt.replace(w, "").replace(w.capitalize(), "")
             clean_prompt = clean_prompt.strip() or text
-            encoded_prompt = urllib.parse.quote(clean_prompt)
-            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+            img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(clean_prompt)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
             try:
                 await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, आपकी इमेज तैयार है!\n\n🎯 Prompt: {text}")
-            except Exception as e:
-                print(f"[IMAGE ERROR] Direct send failed, sending fallback link: {e}")
-                await update.message.reply_text(f"Boss, डायरेक्ट फोटो सेंड करने में समस्या आई, यह रहा आपका इमेज लिंक:\n{img_url}")
+            except Exception:
+                await update.message.reply_text(f"Boss, यह रहा आपका इमेज लिंक:\n{img_url}")
             return
 
-        # 2. Autonomous Background Task Handler
+        # Background Research Task
         if any(w in lower_text for w in ["background", "बैकग्राउंड", "रिसर्च करो", "research karo", "create website", "project"]):
             asyncio.create_task(execute_background_task(text))
-            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिसर्च और रिपोर्ट तैयार होते ही इसी चैट में अलर्ट भेजती हूँ।")
+            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। रिपोर्ट तैयार होते ही इसी चैट में भेजती हूँ।")
             return
 
+        # Normal Chat
         reply = ""
-
-        # 3. Direct Fast Response (Gemini 3.6 Flash -> Groq openai/gpt-oss-20b)
         if gemini_client:
             try:
                 response = gemini_client.models.generate_content(
-                    model="gemini-3.6-flash",
+                    model="gemini-2.5-flash",
                     contents=text,
-                    config=types.GenerateContentConfig(
-                        system_instruction=build_system_prompt()
-                    )
+                    config=types.GenerateContentConfig(system_instruction=build_system_prompt())
                 )
                 if response and hasattr(response, "text") and response.text:
                     reply = response.text
-            except Exception as e:
-                print(f"[FALLBACK TRIGGER] Gemini error: {e}, falling back to Groq...")
+            except Exception:
+                pass
 
         if not reply and groq_client:
             try:
@@ -330,13 +274,12 @@ async def run_telegram_gateway():
                 )
                 reply = chat_completion.choices[0].message.content
             except Exception as e:
-                print(f"[ERROR] Groq Chat Failed: {e}")
+                print(f"[GROQ ERROR]: {e}")
 
-        # Telegram Message Delivery
         if reply:
             await update.message.reply_text(reply)
         else:
-            await update.message.reply_text("Boss, दोनों AI इंजन इस समय व्यस्त हैं। कृपया थोड़ी देर में पुनः प्रयास करें।")
+            await update.message.reply_text("Boss, सर्वर व्यस्त है। कृपया पुनः प्रयास करें।")
 
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
@@ -345,168 +288,135 @@ async def run_telegram_gateway():
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
 
-# --- WebSocket Live Call Link (Web Dashboard) ---
+# --- Real-Time Hybrid Voice Call Link ---
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
     await ws.accept()
-    if not gemini_client:
-        await ws.send_json({"type": "error", "message": "Gemini API Key missing"})
-        await ws.close()
-        return
+    print("[WEBSOCKET] Realtime Call Link Connected")
 
-    sys_prompt = build_system_prompt()
-    live_config = types.LiveConnectConfig(
-        response_modalities=[types.Modality.AUDIO],
-        system_instruction=types.Content(parts=[types.Part(text=sys_prompt)]),
-        tools=[{"function_declarations": TOOL_DECLARATIONS}],
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Despina")
-            )
-        )
-    )
+    # Initial Voice Greeting via Swara Neural
+    welcome_text = "नमस्ते Boss! कॉल कनेक्ट हो चुकी है। कहिए, आज क्या प्लान है?"
+    welcome_audio = await generate_neural_speech(welcome_text)
+    if welcome_audio:
+        await ws.send_json({"type": "audio", "data": welcome_audio})
+        await ws.send_json({"type": "reply_text", "text": welcome_text})
+
+    async def keep_alive():
+        try:
+            while True:
+                await asyncio.sleep(15)
+                await ws.send_json({"type": "ping", "timestamp": time.time()})
+        except Exception:
+            pass
+
+    asyncio.create_task(keep_alive())
 
     try:
-        async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            await session.send_client_content(
-                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya! कॉल कनेक्ट हो चुकी है, छोटा सा स्वागत कीजिये।")])],
-                turn_complete=True
-            )
+        while True:
+            data = await ws.receive_text()
+            msg = json.loads(data)
+            msg_type = msg.get("type")
 
-            async def keep_alive():
+            user_query = ""
+
+            # 1. Audio Voice Input via Groq Whisper
+            if msg_type == "audio_blob" and groq_client:
                 try:
-                    while True:
-                        await asyncio.sleep(15)
-                        await ws.send_json({"type": "ping", "timestamp": time.time()})
-                except Exception:
-                    pass
+                    wav_bytes = base64.b64decode(msg.get("data", ""))
+                    audio_file = io.BytesIO(wav_bytes)
+                    audio_file.name = "audio.wav"
+                    loop = asyncio.get_running_loop()
+                    transcription = await loop.run_in_executor(
+                        None,
+                        lambda: groq_client.audio.transcriptions.create(
+                            file=audio_file, model="whisper-large-v3", language="hi"
+                        )
+                    )
+                    user_query = transcription.text.strip()
+                except Exception as e:
+                    print(f"[WHISPER ERROR]: {e}")
 
-            async def receive_from_user():
-                try:
-                    while True:
-                        data = await ws.receive_text()
-                        msg = json.loads(data)
-                        msg_type = msg.get("type")
+            elif msg_type == "query":
+                user_query = msg.get("text", "").strip()
 
-                        # Text Query Input
-                        if msg_type == "query":
-                            text = msg.get("text", "").strip()
-                            if text:
-                                await session.send_client_content(
-                                    turns=[types.Content(role="user", parts=[types.Part(text=text)])],
-                                    turn_complete=True
+            if user_query:
+                # Transcribed text UI par display karo
+                await ws.send_json({"type": "transcript", "text": user_query})
+                lower_q = user_query.lower()
+
+                # Action Check 1: Image Generation
+                if any(t in lower_q for t in ["image", "photo", "tasveer", "चित्र"]) and any(a in lower_q for a in ["banao", "generate", "dikhao", "create"]):
+                    clean_p = user_query
+                    for w in ["maya", "generate karo", "generate", "image", "photo", "banao", "ek", "ki"]:
+                        clean_p = clean_p.replace(w, "").replace(w.capitalize(), "")
+                    clean_p = clean_p.strip() or user_query
+                    img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(clean_p)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                    await ws.send_json({"type": "image", "url": img_url})
+
+                    # Telegram Sync
+                    chat_id = get_boss_chat_id()
+                    if chat_id and TELEGRAM_BOT_TOKEN:
+                        async def sync_photo():
+                            async with httpx.AsyncClient() as client:
+                                try:
+                                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto", json={
+                                        "chat_id": chat_id, "photo": img_url, "caption": f"✨ Boss, Live Call Image!\n🎯 {user_query}"
+                                    }, timeout=15.0)
+                                except Exception: pass
+                        asyncio.create_task(sync_photo())
+
+                    maya_reply = "Boss, स्क्रीन पर देखिए, इमेज तैयार कर दी है और टेलीग्राम पर भी भेज दी है।"
+                
+                # Action Check 2: Background Tasks
+                elif any(w in lower_q for w in ["background", "रिसर्च करो", "project", "banao"]):
+                    asyncio.create_task(execute_background_task(user_query))
+                    maya_reply = "Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिपोर्ट टेलीग्राम पर भेज दूँगी।"
+
+                # Action Check 3: General Intelligence via Gemini / Groq Text
+                else:
+                    maya_reply = ""
+                    if gemini_client:
+                        try:
+                            res = gemini_client.models.generate_content(
+                                model="gemini-2.5-flash",
+                                contents=user_query,
+                                config=types.GenerateContentConfig(system_instruction=build_system_prompt())
+                            )
+                            if res and hasattr(res, "text") and res.text:
+                                maya_reply = res.text
+                        except Exception:
+                            pass
+
+                    if not maya_reply and groq_client:
+                        try:
+                            loop = asyncio.get_running_loop()
+                            completion = await loop.run_in_executor(
+                                None,
+                                lambda: groq_client.chat.completions.create(
+                                    messages=[
+                                        {"role": "system", "content": build_system_prompt()},
+                                        {"role": "user", "content": user_query}
+                                    ],
+                                    model="openai/gpt-oss-20b"
                                 )
+                            )
+                            maya_reply = completion.choices[0].message.content
+                        except Exception as e:
+                            print(f"[GROQ CHAT ERROR]: {e}")
 
-                        # Native PCM Stream (if client sends raw buffer)
-                        elif msg_type == "audio_pcm":
-                            raw_pcm_bytes = base64.b64decode(msg.get("data", ""))
-                            if raw_pcm_bytes:
-                                await session.send_realtime_input(
-                                    media_chunks=[types.Blob(data=raw_pcm_bytes, mime_type="audio/pcm;rate=16000")]
-                                )
+                    if not maya_reply:
+                        maya_reply = "जी Boss, बताइए मैं आपकी क्या सहायता कर सकती हूँ?"
 
-                        # Zero-Beep Voice Processing (Audio Blob -> Groq Whisper)
-                        elif msg_type == "audio_blob" and groq_client:
-                            try:
-                                wav_bytes = base64.b64decode(msg.get("data"))
-                                audio_file = io.BytesIO(wav_bytes)
-                                audio_file.name = "audio.wav"
-                                loop = asyncio.get_running_loop()
-                                transcription = await loop.run_in_executor(
-                                    None,
-                                    lambda: groq_client.audio.transcriptions.create(
-                                        file=audio_file, model="whisper-large-v3", language="hi"
-                                    )
-                                )
-                                user_text = transcription.text.strip()
-                                if user_text:
-                                    # Send detected text to Web UI to display
-                                    await ws.send_json({"type": "transcript", "text": user_text})
-                                    # Forward query directly to Maya Live Session
-                                    await session.send_client_content(
-                                        turns=[types.Content(role="user", parts=[types.Part(text=user_text)])],
-                                        turn_complete=True
-                                    )
-                            except Exception as audio_err:
-                                print(f"[AUDIO] Transcription error: {audio_err}")
-                except Exception:
-                    pass
+                # UI Update & Neural Voice Stream
+                await ws.send_json({"type": "reply_text", "text": maya_reply})
+                audio_b64 = await generate_neural_speech(maya_reply)
+                if audio_b64:
+                    await ws.send_json({"type": "audio", "data": audio_b64})
 
-            async def send_to_user():
-                try:
-                    while True:
-                        async for response in session.receive():
-                            sc = response.server_content
-                            if sc and sc.model_turn:
-                                for part in sc.model_turn.parts:
-                                    if hasattr(part, "inline_data") and part.inline_data:
-                                        b64_audio = base64.b64encode(part.inline_data.data).decode("utf-8")
-                                        await ws.send_json({"type": "audio", "data": b64_audio})
-
-                            if response.tool_call:
-                                fn_responses = []
-                                for call in response.tool_call.function_calls:
-                                    if call.name == "start_background_task":
-                                        desc = call.args.get("task_description", "")
-                                        asyncio.create_task(execute_background_task(desc))
-                                        fn_responses.append(
-                                            types.FunctionResponse(
-                                                id=call.id, name=call.name,
-                                                response={"result": "Background task accepted and running."}
-                                            )
-                                        )
-                                    elif call.name == "generate_image":
-                                        prompt = call.args.get("prompt", "futuristic art")
-                                        img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
-                                        
-                                        # 1. Web Dashboard Projection
-                                        await ws.send_json({"type": "image", "url": img_url})
-
-                                        # 2. Cross-Platform Auto Sync to Telegram
-                                        chat_id = get_boss_chat_id()
-                                        if chat_id and TELEGRAM_BOT_TOKEN:
-                                            async def forward_to_telegram(c_id, url, pr):
-                                                t_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-                                                async with httpx.AsyncClient() as client:
-                                                    try:
-                                                        await client.post(t_url, json={
-                                                            "chat_id": c_id,
-                                                            "photo": url,
-                                                            "caption": f"✨ Boss, Web Call se generated image sync ho chuki hai!\n\n🎯 Prompt: {pr}"
-                                                        }, timeout=15.0)
-                                                    except Exception as te:
-                                                        print(f"Telegram sync error: {te}")
-                                            asyncio.create_task(forward_to_telegram(chat_id, img_url, prompt))
-
-                                        fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Image displayed on web and sent to Telegram."}))
-                                    elif call.name == "close_image":
-                                        await ws.send_json({"type": "close_image"})
-                                        fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Closed."}))
-                                    elif call.name == "remember_fact":
-                                        save_memory_fact(call.args.get("fact", ""))
-                                        fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Saved."}))
-                                    elif call.name == "system_diagnostics":
-                                        fn_responses.append(
-                                            types.FunctionResponse(
-                                                id=call.id,
-                                                name=call.name,
-                                                response={
-                                                    "status": "All Core Pipelines OK",
-                                                    "gemini_link": "Connected Native Audio",
-                                                    "latency": "Normal (<150ms)",
-                                                    "memory_store": "Active"
-                                                }
-                                            )
-                                        )
-
-                                if fn_responses:
-                                    await session.send_tool_response(function_responses=fn_responses)
-                except Exception:
-                    pass
-
-            await asyncio.gather(receive_from_user(), send_to_user(), keep_alive())
+    except WebSocketDisconnect:
+        print("[WEBSOCKET] Live call disconnected")
     except Exception as e:
-        print(f"Session error: {e}")
+        print(f"[WEBSOCKET ERROR]: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
