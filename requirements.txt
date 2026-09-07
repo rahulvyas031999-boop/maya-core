@@ -9,3 +9,4 @@ pillow
 requests
 python-telegram-bot
 httpx
+edge-tts
