@@ -13,11 +13,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from groq import Groq
 from google import genai
-from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# ReAct & Workspace Modules
 from agent_loop import run_react_agent
 from task_queue import (
     create_task,
@@ -26,13 +24,14 @@ from task_queue import (
     get_task,
     update_task_status,
     get_active_tasks_summary,
-    get_unprocessed_tasks
+    get_unprocessed_tasks,
+    remember_fact,
+    recall_memory
 )
 from workspace_manager import list_artifacts, get_workspace_path, WORKSPACE_DIR
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
-# --- Environment Setup ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -42,11 +41,12 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 STATE_FILE = "maya_state.json"
-CURRENT_ACTIVE_WS: WebSocket = None  # Single Active WebSocket Lock
+CURRENT_ACTIVE_WS: WebSocket = None
 
+# VERIFIED GHOST PHRASES (Including 'झाल' and Whisper Hallucinations)
 GHOST_PHRASES = [
-    "subtitles", "thank you", "watching", "amara.org", "subscribe", 
-    "you", "bye", "thanks", "dhanyawad", "foreign", "[music]"
+    "झाल", "zhal", "subtitles", "thank you", "watching", "amara.org", 
+    "subscribe", "you", "bye", "thanks", "dhanyawad", "foreign", "[music]"
 ]
 
 def load_json(filepath: str, default: Any) -> Any:
@@ -106,7 +106,6 @@ async def dispatch_to_telegram(text: str = None, photo_url: str = None, document
         except Exception as e:
             print(f"[TELEGRAM DISPATCH ERROR]: {e}")
 
-# --- Decoupled Heavy Worker (Runs completely independent of live voice call) ---
 async def run_autonomous_worker(task_id: str, initial_prompt: str):
     print(f"[HEAVY WORKER] Task {task_id} launched: {initial_prompt}")
     update_task_status(task_id, "processing")
@@ -118,31 +117,27 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
     if mods:
         full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
 
-    # ReAct agent execution
     final_delivery = await run_react_agent(full_spec)
     update_task_status(task_id, "completed", final_delivery)
 
-    # 1. Telegram Dispatch
     report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
     await dispatch_to_telegram(text=report_msg)
 
-    # 2. Telegram File Dispatch
     all_files = list_artifacts()
     if all_files:
         latest_file = all_files[-1]
         actual_file_path = get_workspace_path(latest_file["relative_path"])
         await dispatch_to_telegram(
             document_path=actual_file_path, 
-            caption=f"📁 Boss, यहाँ आपकी जनरेटेड फ़ाइल है: {latest_file['filename']}"
+            caption=f"📁 Boss, यहाँ आपकी फ़ाइल है: {latest_file['filename']}"
         )
 
-    # 3. Live WebSocket Alert (Non-blocking)
     global CURRENT_ACTIVE_WS
     if CURRENT_ACTIVE_WS:
         try:
             await CURRENT_ACTIVE_WS.send_json({
                 "type": "reply_text",
-                "text": f"Boss, टास्क पूरा हो गया है। फ़ाइल और रिपोर्ट टेलीग्राम पर भेज दी है।"
+                "text": f"Boss, बैकग्राउंड टास्क पूरा हो गया है। रिपोर्ट टेलीग्राम पर भेज दी है।"
             })
         except Exception:
             pass
@@ -157,20 +152,23 @@ def extract_clean_json(text: str) -> Dict[str, Any]:
         return {}
 
 async def master_router(user_input: str) -> Dict[str, Any]:
-    words = user_input.strip().split()
-    if len(words) <= 2 and not any(w in user_input.lower() for w in ["photo", "image", "tasveer"]):
+    clean_inp = user_input.lower().strip()
+    words = clean_inp.split()
+
+    if len(words) <= 2 and not any(k in clean_inp for k in ["banao", "generate", "search"]):
         return {
             "intent": "chat",
-            "voice_response": "जी Boss, बताइए मैं क्या करूँ?",
+            "voice_response": "जी Boss, बताइए मैं आपके लिए क्या करूँ?",
             "task_payload": user_input,
             "screen_content": ""
         }
 
+    explicit_image_cmd = any(k in clean_inp for k in ["photo banao", "image banao", "tasveer banao", "generate image", "chitra banao"])
     active_summary = get_active_tasks_summary()
 
     router_prompt = (
         f"You are Maya, an ultra-smart, loyal FEMALE AI Executive for Boss.\n"
-        f"GENDER RULE: Strictly speak as a female in Hindi/Hinglish (ALWAYS use 'करती हूँ', 'बताती हूँ', 'देखती हूँ'. NEVER use male 'करता हूँ').\n"
+        f"GENDER RULE: Strictly speak as a female in Hindi/Hinglish (ALWAYS use 'करती हूँ', 'बताती हूँ'. NEVER use male 'करता हूँ').\n"
         f"ACTIVE BACKGROUND TASKS: {json.dumps(active_summary, ensure_ascii=False)}\n"
         f"BOSS INPUT: \"{user_input}\"\n\n"
         "Return STRICT JSON only:\n"
@@ -191,16 +189,31 @@ async def master_router(user_input: str) -> Dict[str, Any]:
                 None,
                 lambda: groq_client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are Maya. Strictly output JSON with female Hindi grammar."},
+                        {"role": "system", "content": "You are Maya Master Router. Output valid JSON only with female grammar."},
                         {"role": "user", "content": router_prompt}
                     ],
                     model="openai/gpt-oss-20b",
+                    max_tokens=70,
                     response_format={"type": "json_object"}
                 )
             )
             decision = extract_clean_json(res.choices[0].message.content)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ROUTER GROQ WARNING]: {e}. Switching to Gemini...")
+
+    if not decision and gemini_client:
+        try:
+            res = gemini_client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=router_prompt
+            )
+            decision = extract_clean_json(res.text)
+        except Exception as ge:
+            print(f"[ROUTER GEMINI WARNING]: {ge}")
+
+    if decision.get("intent") == "generate_image" and not explicit_image_cmd:
+        decision["intent"] = "chat"
+        decision["voice_response"] = "जी Boss, क्या आप चाहते हैं कि मैं इसकी इमेज बनाऊँ?"
 
     return decision or {
         "intent": "chat",
@@ -221,7 +234,6 @@ async def generate_neural_speech(text: str) -> str:
     except Exception:
         return ""
 
-# --- Safe Telegram Bot Gateway ---
 async def run_telegram_gateway():
     if not TELEGRAM_BOT_TOKEN:
         return
@@ -253,7 +265,7 @@ async def run_telegram_gateway():
                 tid = f"task_{int(time.time())}"
                 create_task(tid, payload)
                 asyncio.create_task(run_autonomous_worker(tid, payload))
-                await update.message.reply_text("Boss, मैंने काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल भेज दूँगी।")
+                await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल भेज दूँगी।")
 
             elif intent == "modify_task":
                 tid = decision.get("task_id") or get_latest_active_task_id()
@@ -274,7 +286,7 @@ async def run_telegram_gateway():
         await application.start()
         await application.updater.start_polling(drop_pending_updates=True)
     except Exception as e:
-        print(f"[TELEGRAM INIT WARNING]: {e}")
+        print(f"[TELEGRAM WARNING]: {e}")
 
 @app.on_event("startup")
 async def startup():
@@ -299,7 +311,7 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "Maya Core Active", "active_tasks": len(get_active_tasks_summary())}
+    return {"status": "Maya Core Online", "active_tasks": len(get_active_tasks_summary())}
 
 @app.get("/artifacts")
 async def get_artifacts_list():
@@ -311,11 +323,10 @@ async def download_or_view_artifact(file_path: str):
         safe_path = get_workspace_path(file_path)
         if os.path.exists(safe_path) and os.path.isfile(safe_path):
             return FileResponse(safe_path)
-        return {"error": "File not found in workspace"}
+        return {"error": "File not found"}
     except Exception as e:
         return {"error": str(e)}
 
-# --- WebSocket Live Voice Link (Decoupled & Single Session Lock) ---
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
     global CURRENT_ACTIVE_WS
@@ -340,27 +351,30 @@ async def websocket_live_call(ws: WebSocket):
             msg = json.loads(data)
             user_query = ""
 
-            # 1. Instant Text from Native Browser ASR (Fast & Zero Audio Upload)
             if msg.get("type") == "query":
                 user_query = msg.get("text", "").strip()
 
-            # 2. Audio Blob Fallback
             elif msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
-                    if len(wav_bytes) >= 6000:
+                    if len(wav_bytes) >= 7000:
                         audio_file = io.BytesIO(wav_bytes)
                         audio_file.name = "audio.wav"
                         loop = asyncio.get_running_loop()
                         transcription = await loop.run_in_executor(
                             None,
                             lambda: groq_client.audio.transcriptions.create(
-                                file=audio_file, model="whisper-large-v3", language="hi"
+                                file=audio_file, 
+                                model="whisper-large-v3-turbo", 
+                                language="hi"
                             )
                         )
                         cand = transcription.text.strip()
-                        if not any(g in cand.lower() for g in GHOST_PHRASES) and len(cand) > 2:
+                        clean_check = cand.lower().strip()
+                        if clean_check not in GHOST_PHRASES and not any(g in clean_check for g in GHOST_PHRASES) and len(clean_check) > 2:
                             user_query = cand
+                        else:
+                            print(f"[GHOST BLOCKED]: Filtered out phantom text '{cand}'")
                 except Exception as e:
                     print(f"[WHISPER ERROR]: {e}")
 
@@ -371,9 +385,7 @@ async def websocket_live_call(ws: WebSocket):
                 intent = decision.get("intent", "chat")
                 voice_msg = decision.get("voice_response", "जी Boss!")
                 payload = decision.get("task_payload") or user_query
-                screen_doc = decision.get("screen_content", "")
 
-                # Decoupled Heavy Task Trigger (Voice loop par koi load nahi padega)
                 if intent == "new_heavy_task":
                     tid = f"task_{int(time.time())}"
                     create_task(tid, payload)
@@ -394,11 +406,6 @@ async def websocket_live_call(ws: WebSocket):
                     await ws.send_json({"type": "image", "url": img_url})
                     asyncio.create_task(dispatch_to_telegram(photo_url=img_url, caption=f"✨ Live Image: {payload}"))
 
-                if screen_doc:
-                    await ws.send_json({"type": "document", "content": screen_doc})
-                    asyncio.create_task(dispatch_to_telegram(text=f"📋 **LIVE SCRIPT / PROJECTION**\n\n{screen_doc}"))
-
-                # Send Crisp Voice Output
                 await ws.send_json({"type": "reply_text", "text": voice_msg})
                 speech_b64 = await generate_neural_speech(voice_msg)
                 if speech_b64:
