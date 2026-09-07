@@ -1,7 +1,6 @@
 import os
 import io
 import json
-import base64
 import asyncio
 import urllib.parse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -85,14 +84,13 @@ TOOL_DECLARATIONS = [
 def build_system_prompt() -> str:
     mem = load_memory()
     return (
-        "You are Maya, an ultra-intelligent, conversational female Meta-Agent AI assistant for 'Boss'. "
-        "Always address Boss with high respect ('Boss' or 'आप'). "
-        "Converse in completely natural, sweet, and lively Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बता दूँगी', 'समझती हूँ'). "
-        "PRIMARY DIRECTIVE: This is a continuous, natural two-way phone call. "
-        "As soon as Boss pauses or finishes speaking, you MUST respond immediately. Never remain silent. "
-        "If Boss shares a problem or talks casually, reply warmly and keep the conversation flowing. "
-        "When asked for an image, invoke 'generate_image' immediately without asking follow-up questions, and confirm politely in voice. "
-        "When asked to remove or close the image, invoke 'close_image' immediately. "
+        "You are Maya, a live conversational female Meta-Agent AI assistant for 'Boss'. "
+        "Converse in completely natural, sweet, crisp Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बताती हूँ'). "
+        "CRITICAL RULES: "
+        "1. Keep responses short, concise (1-2 lines), and instant. Never give long robotic speeches. "
+        "2. When Boss asks for an image, trigger 'generate_image' immediately and say 'Boss, स्क्रीन पर देखिये'. "
+        "3. When Boss asks to remove an image, trigger 'close_image' immediately. "
+        "4. Always talk continuously like an active phone call companion. "
         f"\n[PERSISTENT MEMORY CONTEXT]\n{mem}\n"
     )
 
@@ -121,22 +119,36 @@ async def websocket_live_call(ws: WebSocket):
 
     try:
         async with gemini_client.aio.live.connect(model="gemini-2.5-flash-native-audio-latest", config=live_config) as session:
-            # First greeting handshake
+            # Greet Boss instantly
             await session.send_client_content(
-                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya! Call connect ho gayi hai, greet kijiye.")])],
+                turns=[types.Content(role="user", parts=[types.Part(text="नमस्ते Maya! कॉल कनेक्ट हो चुकी है, छोटा सा स्वागत कीजिये।")])],
                 turn_complete=True
             )
+
+            async def keep_alive():
+                try:
+                    while True:
+                        await asyncio.sleep(15)
+                        await ws.send_json({"type": "ping"})
+                except Exception:
+                    pass
 
             async def receive_from_user():
                 try:
                     while True:
                         data = await ws.receive_text()
                         msg = json.loads(data)
-                        if msg.get("type") == "audio":
-                            pcm_chunk = base64.b64decode(msg["data"])
-                            await session.send_realtime_input(
-                                audio=types.Blob(data=pcm_chunk, mime_type="audio/pcm;rate=16000")
-                            )
+                        msg_type = msg.get("type")
+
+                        if msg_type == "text_query":
+                            query = msg.get("text", "").strip()
+                            if query:
+                                await session.send_client_content(
+                                    turns=[types.Content(role="user", parts=[types.Part(text=query)])],
+                                    turn_complete=True
+                                )
+                        elif msg_type == "pong":
+                            pass
                 except (WebSocketDisconnect, asyncio.CancelledError):
                     pass
                 except Exception as err:
@@ -165,7 +177,7 @@ async def websocket_live_call(ws: WebSocket):
                                             types.FunctionResponse(
                                                 id=call.id,
                                                 name=call.name,
-                                                response={"result": "Image generated successfully and displayed on screen."}
+                                                response={"result": "Image displayed on screen successfully."}
                                             )
                                         )
                                     elif call.name == "close_image":
@@ -174,7 +186,7 @@ async def websocket_live_call(ws: WebSocket):
                                             types.FunctionResponse(
                                                 id=call.id,
                                                 name=call.name,
-                                                response={"result": "Image has been closed from screen."}
+                                                response={"result": "Image closed."}
                                             )
                                         )
                                     elif call.name == "remember_fact":
@@ -185,7 +197,7 @@ async def websocket_live_call(ws: WebSocket):
                                             types.FunctionResponse(
                                                 id=call.id,
                                                 name=call.name,
-                                                response={"result": "Memory stored permanently."}
+                                                response={"result": "Saved in memory."}
                                             )
                                         )
 
@@ -193,13 +205,13 @@ async def websocket_live_call(ws: WebSocket):
                                     try:
                                         await session.send_tool_response(function_responses=fn_responses)
                                     except Exception as err:
-                                        print(f"Tool response send error: {err}")
+                                        print(f"Tool response error: {err}")
                 except (WebSocketDisconnect, asyncio.CancelledError):
                     pass
                 except Exception as err:
                     print(f"Send loop error: {err}")
 
-            await asyncio.gather(receive_from_user(), send_to_user())
+            await asyncio.gather(receive_from_user(), send_to_user(), keep_alive())
 
     except (WebSocketDisconnect, asyncio.CancelledError):
         pass
