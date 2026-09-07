@@ -228,11 +228,13 @@
     <script>
         let ws = null;
         let audioCtx = null;
-        let micStream = null;
-        let micSource = null;
-        let processor = null;
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
         let isCalling = false;
         let isMayaSpeaking = false;
+        let silenceTimer = null;
+        let animFrameId = null;
 
         const orb = document.getElementById('orb');
         const statusLabel = document.getElementById('statusLabel');
@@ -251,7 +253,6 @@
 
         async function startLiveCall() {
             try {
-                // Dual Sample-rate support: 16kHz for input mic, 24kHz for playback
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
 
@@ -262,8 +263,8 @@
                     isCalling = true;
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
-                    statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss";
-                    await setupContinuousMicStream();
+                    statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss...";
+                    await startBeepFreeVoiceLink();
                 };
 
                 ws.onmessage = async (e) => {
@@ -293,56 +294,81 @@
             }
         }
 
-        async function setupContinuousMicStream() {
+        async function startBeepFreeVoiceLink() {
             try {
-                micStream = await navigator.mediaDevices.getUserMedia({
+                mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
-                        channelCount: 1,
-                        sampleRate: 16000,
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true
                     }
                 });
 
-                const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                micSource = micAudioCtx.createMediaStreamSource(micStream);
-                // Zero-beep Audio Processor (Native Buffer capture)
-                processor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+                const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = micAudioCtx.createMediaStreamSource(mediaStream);
+                const analyser = micAudioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
 
-                processor.onaudioprocess = (e) => {
-                    if (!isCalling || isMayaSpeaking || !ws || ws.readyState !== WebSocket.OPEN) return;
+                mediaRecorder = new MediaRecorder(mediaStream);
+                audioChunks = [];
 
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    let pcm16 = new Int16Array(inputData.length);
-                    let sumSquares = 0.0;
-
-                    for (let i = 0; i < inputData.length; i++) {
-                        let sample = Math.max(-1, Math.min(1, inputData[i]));
-                        pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                        sumSquares += sample * sample;
-                    }
-
-                    // Client-Side VAD Threshold (Bolne par hi send karega, mic on/off beep 0%)
-                    const rms = Math.sqrt(sumSquares / inputData.length);
-                    if (rms > 0.015) {
-                        orb.classList.add('user-active');
-                        let binary = '';
-                        let bytes = new Uint8Array(pcm16.buffer);
-                        for (let i = 0; i < bytes.byteLength; i++) {
-                            binary += String.fromCharCode(bytes[i]);
-                        }
-                        ws.send(JSON.stringify({
-                            type: 'audio_pcm',
-                            data: btoa(binary)
-                        }));
-                    } else {
-                        orb.classList.remove('user-active');
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) {
+                        audioChunks.push(e.data);
                     }
                 };
 
-                micSource.connect(processor);
-                processor.connect(micAudioCtx.destination);
+                mediaRecorder.onstop = () => {
+                    if (audioChunks.length > 0 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        audioChunks = [];
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const base64Audio = reader.result.split(',')[1];
+                            ws.send(JSON.stringify({
+                                type: 'audio_blob',
+                                data: base64Audio
+                            }));
+                        };
+                        reader.readAsDataURL(audioBlob);
+                    }
+                    if (isCalling && !isMayaSpeaking) {
+                        try { mediaRecorder.start(); } catch(e){}
+                    }
+                };
+
+                mediaRecorder.start();
+
+                // Smart VAD Loop (Silent threshold auto-detection)
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                function monitorAudio() {
+                    if (!isCalling) return;
+                    analyser.getByteFrequencyData(dataArray);
+
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        sum += dataArray[i];
+                    }
+                    let avg = sum / dataArray.length;
+
+                    // आवाज़ की पहचान होने पर Orb रिएक्ट करेगा
+                    if (avg > 14 && !isMayaSpeaking) {
+                        orb.classList.add('user-active');
+                        clearTimeout(silenceTimer);
+
+                        // 650ms की खामोशी आते ही तुरंत ऑडियो चंक सर्वर पर भेजा जाएगा
+                        silenceTimer = setTimeout(() => {
+                            orb.classList.remove('user-active');
+                            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                                mediaRecorder.stop();
+                            }
+                        }, 650);
+                    }
+
+                    animFrameId = requestAnimationFrame(monitorAudio);
+                }
+                monitorAudio();
 
             } catch (err) {
                 console.error("Mic Access Error:", err);
@@ -357,15 +383,15 @@
             statusLabel.innerText = "कॉल समाप्त // पुनः बात करने के लिए टैप करें";
             orb.className = 'quantum-orb';
 
-            if (processor && micSource) {
-                try {
-                    micSource.disconnect();
-                    processor.disconnect();
-                } catch(e){}
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            clearTimeout(silenceTimer);
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                try { mediaRecorder.stop(); } catch(e){}
             }
-            if (micStream) {
-                micStream.getTracks().forEach(track => track.stop());
-                micStream = null;
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = null;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.close();
