@@ -11,7 +11,7 @@
             --purple: #9d4edd;
             --red: #ff0055;
             --dark: #030612;
-            --glass: rgba(6, 12, 28, 0.88);
+            --glass: rgba(6, 12, 28, 0.90);
             --border: rgba(0, 243, 255, 0.25);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -26,10 +26,8 @@
             justify-content: space-between;
             padding: 12px;
             overflow: hidden;
-            position: relative;
         }
         header {
-            z-index: 20;
             width: 100%;
             max-width: 480px;
             display: flex;
@@ -39,7 +37,6 @@
             background: var(--glass);
             border: 1px solid var(--border);
             border-radius: 10px;
-            backdrop-filter: blur(12px);
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
@@ -65,10 +62,7 @@
             width: 6px; height: 6px; border-radius: 50%;
             background: var(--cyan);
             box-shadow: 0 0 8px var(--cyan);
-            animation: pulse 1.5s infinite;
         }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-
         #mainStage {
             flex: 1;
             width: 100%;
@@ -78,7 +72,6 @@
             align-items: center;
             justify-content: center;
             position: relative;
-            margin: 8px 0;
         }
         #coreContainer {
             position: relative;
@@ -106,7 +99,7 @@
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%);
             box-shadow: 0 0 35px var(--cyan), inset 0 0 15px #fff;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            transition: transform 0.15s ease;
         }
         .quantum-orb.speaking {
             animation: voicePulse 0.9s infinite alternate ease-in-out;
@@ -121,22 +114,6 @@
         @keyframes voicePulse {
             from { transform: scale(1); filter: brightness(1); }
             to { transform: scale(1.2); filter: brightness(1.3); }
-        }
-
-        #docViewer {
-            display: none;
-            width: 100%;
-            height: 100%;
-            background: rgba(3, 7, 20, 0.95);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 12px;
-            overflow-y: auto;
-            color: #d1e8ff;
-            font-size: 0.9rem;
-            line-height: 1.5;
-            user-select: text;
-            flex-direction: column;
         }
 
         #actionCard {
@@ -155,7 +132,7 @@
         #actionCard img {
             width: 100%;
             border-radius: 8px;
-            max-height: 180px;
+            max-height: 200px;
             object-fit: cover;
         }
         .action-btns { display: flex; gap: 8px; width: 100%; }
@@ -172,24 +149,19 @@
             border: 1px solid var(--cyan);
             cursor: pointer;
         }
-        .close-btn {
-            background: rgba(255, 0, 85, 0.15);
-            color: var(--red);
-            border-color: var(--red);
-        }
+        .close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
 
         #controls {
-            z-index: 20;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
             width: 100%;
             max-width: 480px;
             background: var(--glass);
             padding: 10px 14px;
             border-radius: 14px;
             border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
         }
         #statusLabel {
             font-size: 0.88rem;
@@ -233,10 +205,10 @@
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">INSTANT-LINK v5.0</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">SOVEREIGN OS</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
-            <span id="pingHud">EDGE // READY</span>
+            <span>SILENT // VAD</span>
         </div>
     </header>
 
@@ -245,14 +217,6 @@
             <div class="ring ring-1"></div>
             <div class="ring ring-2"></div>
             <div id="orb" class="quantum-orb"></div>
-        </div>
-
-        <div id="docViewer">
-            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-                <span style="font-family:'Orbitron'; color:var(--cyan); font-size:0.75rem;">📋 LIVE PROJECTION</span>
-                <button onclick="closeDocViewer()" style="background:none; border:none; color:var(--red); font-weight:bold; cursor:pointer;">✖ HATAO</button>
-            </div>
-            <div id="docContent"></div>
         </div>
 
         <div id="actionCard">
@@ -268,7 +232,7 @@
         <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
         <div class="btn-row">
             <button id="callToggle" class="round-btn" onclick="toggleCall()">📞</button>
-            <button class="stop-btn" onclick="interruptPlayback()" title="तुरंत रोकें">⏹</button>
+            <button class="stop-btn" onclick="interruptPlayback()" title="रोकें">⏹</button>
         </div>
     </div>
 
@@ -277,20 +241,17 @@
         let isCalling = false;
         let isMayaSpeaking = false;
         let activeAudio = null;
-        let speechRecognizer = null;
         let mediaStream = null;
         let mediaRecorder = null;
         let audioChunks = [];
+        let silenceTimer = null;
+        let animFrameId = null;
 
         const orb = document.getElementById('orb');
-        const coreContainer = document.getElementById('coreContainer');
         const statusLabel = document.getElementById('statusLabel');
         const actionCard = document.getElementById('actionCard');
         const cardImage = document.getElementById('cardImage');
         const downloadBtn = document.getElementById('downloadBtn');
-        const docViewer = document.getElementById('docViewer');
-        const docContent = document.getElementById('docContent');
-        const pingHud = document.getElementById('pingHud');
 
         async function toggleCall() {
             if (!isCalling) await startLiveCall();
@@ -307,7 +268,7 @@
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
                     statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss...";
-                    initSpeechInput();
+                    await initSilentHardwareAudio();
                 };
 
                 ws.onmessage = async (e) => {
@@ -318,8 +279,6 @@
                         statusLabel.innerText = `Boss: "${msg.text}"`;
                     } else if (msg.type === 'reply_text') {
                         statusLabel.innerText = `Maya: "${msg.text}"`;
-                    } else if (msg.type === 'document') {
-                        showDocument(msg.content);
                     } else if (msg.type === 'image') {
                         showActionImage(msg.url);
                     }
@@ -327,76 +286,24 @@
 
                 ws.onclose = () => stopLiveCall();
                 ws.onerror = () => stopLiveCall();
-
             } catch (err) {
                 alert("Connection Error: " + err);
                 stopLiveCall();
             }
         }
 
-        // HACK 1: Browser-Native Speech Recognition (Zero Audio Upload Lag)
-        function initSpeechInput() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-            if (SpeechRecognition) {
-                pingHud.innerText = "NATIVE // RECOG";
-                speechRecognizer = new SpeechRecognition();
-                speechRecognizer.continuous = true;
-                speechRecognizer.interimResults = true;
-                speechRecognizer.lang = 'hi-IN';
-
-                speechRecognizer.onresult = (event) => {
-                    if (isMayaSpeaking) return; // Maya बोल रही हो तो इनपुट छोड़ दो
-
-                    let interimTranscript = '';
-                    let finalTranscript = '';
-
-                    for (let i = event.resultIndex; i < event.results.length; ++i) {
-                        if (event.results[i].isFinal) {
-                            finalTranscript += event.results[i][0].transcript;
-                        } else {
-                            interimTranscript += event.results[i][0].transcript;
-                        }
-                    }
-
-                    const liveText = (finalTranscript || interimTranscript).trim();
-                    if (liveText) {
-                        orb.classList.add('listening');
-                        statusLabel.innerText = `Boss: "${liveText}"`;
-                    }
-
-                    if (finalTranscript.trim().length > 1) {
-                        orb.classList.remove('listening');
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            // सीधा 50-byte टेक्स्ट भेजना, कोई भारी ऑडियो अपलोड नहीं
-                            ws.send(JSON.stringify({ type: 'query', text: finalTranscript.trim() }));
-                        }
-                    }
-                };
-
-                speechRecognizer.onerror = (err) => {
-                    console.log("Speech Recognition Note:", err.error);
-                };
-
-                speechRecognizer.onend = () => {
-                    if (isCalling && !isMayaSpeaking) {
-                        try { speechRecognizer.start(); } catch(e){}
-                    }
-                };
-
-                try { speechRecognizer.start(); } catch(e){}
-            } else {
-                // Fallback: Agar browser me Web Speech API na ho to Audio Blob mode
-                pingHud.innerText = "FALLBACK // ASR";
-                initAudioRecorderFallback();
-            }
-        }
-
-        async function initAudioRecorderFallback() {
+        async function initSilentHardwareAudio() {
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true }
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
                 });
+
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(mediaStream);
+                const analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+
                 mediaRecorder = new MediaRecorder(mediaStream);
                 audioChunks = [];
 
@@ -408,60 +315,77 @@
                     if (audioChunks.length > 0 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
                         const blob = new Blob(audioChunks, { type: 'audio/wav' });
                         audioChunks = [];
-                        if (blob.size > 5000) {
+                        if (blob.size > 7000) {
                             const reader = new FileReader();
                             reader.onloadend = () => {
                                 ws.send(JSON.stringify({ type: 'audio_blob', data: reader.result.split(',')[1] }));
                             };
                             reader.readAsDataURL(blob);
                         }
+                    } else {
+                        audioChunks = [];
                     }
+
                     if (isCalling && !isMayaSpeaking) {
                         try { mediaRecorder.start(); } catch(e){}
                     }
                 };
+
                 mediaRecorder.start();
-            } catch(e) {
-                statusLabel.innerText = "माइक एक्सेस नहीं मिला";
+
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                function monitorVoice() {
+                    if (!isCalling) return;
+                    analyser.getByteFrequencyData(dataArray);
+
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                    let avg = sum / dataArray.length;
+
+                    if (avg > 20 && !isMayaSpeaking) {
+                        orb.classList.add('listening');
+                        clearTimeout(silenceTimer);
+
+                        silenceTimer = setTimeout(() => {
+                            orb.classList.remove('listening');
+                            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                                mediaRecorder.stop();
+                            }
+                        }, 800);
+                    }
+                    animFrameId = requestAnimationFrame(monitorVoice);
+                }
+                monitorVoice();
+
+            } catch (err) {
+                console.error("Mic Error:", err);
+                statusLabel.innerText = "माइक्रोफ़ोन एक्सेस नहीं मिला";
             }
         }
 
-        // Single Audio Lock & Hardware Pause (Zero Echo)
         function playSingleAudio(b64Audio) {
             interruptPlayback();
             isMayaSpeaking = true;
             orb.className = 'quantum-orb speaking';
 
-            if (speechRecognizer) {
-                try { speechRecognizer.stop(); } catch(e){}
-            }
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 try { mediaRecorder.pause(); } catch(e){}
             }
 
             activeAudio = new Audio("data:audio/mp3;base64," + b64Audio);
 
-            const resumeListening = () => {
+            const resumeMic = () => {
                 isMayaSpeaking = false;
                 orb.className = 'quantum-orb';
                 activeAudio = null;
-
-                if (isCalling) {
-                    if (speechRecognizer) {
-                        try { speechRecognizer.start(); } catch(e){}
-                    }
-                    if (mediaRecorder && mediaRecorder.state === 'paused') {
-                        try { mediaRecorder.resume(); } catch(e){}
-                    }
+                if (isCalling && mediaRecorder && mediaRecorder.state === 'paused') {
+                    try { mediaRecorder.resume(); } catch(e){}
                 }
             };
 
-            activeAudio.onended = resumeListening;
-            activeAudio.onerror = resumeListening;
-            activeAudio.play().catch(e => {
-                console.log("Audio play error:", e);
-                resumeListening();
-            });
+            activeAudio.onended = resumeMic;
+            activeAudio.onerror = resumeMic;
+            activeAudio.play().catch(resumeMic);
         }
 
         function interruptPlayback() {
@@ -472,26 +396,9 @@
             }
             isMayaSpeaking = false;
             orb.className = 'quantum-orb';
-
-            if (isCalling) {
-                if (speechRecognizer) {
-                    try { speechRecognizer.start(); } catch(e){}
-                }
-                if (mediaRecorder && mediaRecorder.state === 'paused') {
-                    try { mediaRecorder.resume(); } catch(e){}
-                }
+            if (isCalling && mediaRecorder && mediaRecorder.state === 'paused') {
+                try { mediaRecorder.resume(); } catch(e){}
             }
-        }
-
-        function showDocument(content) {
-            coreContainer.style.display = 'none';
-            docViewer.style.display = 'flex';
-            docContent.innerHTML = content.replace(/\n/g, '<br>');
-        }
-
-        function closeDocViewer() {
-            docViewer.style.display = 'none';
-            coreContainer.style.display = 'flex';
         }
 
         function showActionImage(url) {
@@ -513,13 +420,10 @@
             statusLabel.innerText = "कॉल समाप्त // पुनः बात करने के लिए टैप करें";
             orb.className = 'quantum-orb';
 
-            closeDocViewer();
             closeActionCard();
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            clearTimeout(silenceTimer);
 
-            if (speechRecognizer) {
-                try { speechRecognizer.stop(); } catch(e){}
-                speechRecognizer = null;
-            }
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 try { mediaRecorder.stop(); } catch(e){}
             }
