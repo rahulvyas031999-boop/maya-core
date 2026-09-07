@@ -398,6 +398,16 @@ async def websocket_live_call(ws: WebSocket):
                                     turns=[types.Content(role="user", parts=[types.Part(text=text)])],
                                     turn_complete=True
                                 )
+
+                        # 1. Beep-Free Real-time Native PCM Stream
+                        elif msg_type == "audio_pcm":
+                            raw_pcm_bytes = base64.b64decode(msg.get("data", ""))
+                            if raw_pcm_bytes:
+                                await session.send_realtime_input(
+                                    media_chunks=[types.Blob(data=raw_pcm_bytes, mime_type="audio/pcm;rate=16000")]
+                                )
+
+                        # 2. Hybrid Fallback (Audio Blob -> Groq Whisper)
                         elif msg_type == "audio_blob" and groq_client:
                             try:
                                 wav_bytes = base64.b64decode(msg.get("data"))
@@ -448,8 +458,27 @@ async def websocket_live_call(ws: WebSocket):
                                     elif call.name == "generate_image":
                                         prompt = call.args.get("prompt", "futuristic art")
                                         img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                                        
+                                        # Display on Web Dashboard Screen
                                         await ws.send_json({"type": "image", "url": img_url})
-                                        fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Image displayed."}))
+
+                                        # Cross-Platform Sync: Auto-send to Boss on Telegram
+                                        chat_id = get_boss_chat_id()
+                                        if chat_id and TELEGRAM_BOT_TOKEN:
+                                            async def forward_to_telegram(c_id, url, pr):
+                                                t_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+                                                async with httpx.AsyncClient() as client:
+                                                    try:
+                                                        await client.post(t_url, json={
+                                                            "chat_id": c_id,
+                                                            "photo": url,
+                                                            "caption": f"✨ Boss, Web Call se generated image sync ho chuki hai!\n\n🎯 Prompt: {pr}"
+                                                        }, timeout=15.0)
+                                                    except Exception as te:
+                                                        print(f"Telegram sync error: {te}")
+                                            asyncio.create_task(forward_to_telegram(chat_id, img_url, prompt))
+
+                                        fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Image displayed on web and sent to Telegram."}))
                                     elif call.name == "close_image":
                                         await ws.send_json({"type": "close_image"})
                                         fn_responses.append(types.FunctionResponse(id=call.id, name=call.name, response={"result": "Closed."}))
