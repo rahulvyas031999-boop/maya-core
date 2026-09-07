@@ -11,7 +11,7 @@
             --purple: #9d4edd;
             --red: #ff0055;
             --dark: #030612;
-            --glass: rgba(6, 12, 28, 0.85);
+            --glass: rgba(6, 12, 28, 0.88);
             --border: rgba(0, 243, 255, 0.25);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -24,87 +24,97 @@
             flex-direction: column;
             align-items: center;
             justify-content: space-between;
-            padding: 16px;
+            padding: 12px;
             overflow: hidden;
             position: relative;
         }
         header {
-            z-index: 10;
+            z-index: 20;
             width: 100%;
-            max-width: 420px;
+            max-width: 480px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px 16px;
+            padding: 8px 14px;
             background: var(--glass);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: 10px;
             backdrop-filter: blur(12px);
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
             font-weight: 900;
-            font-size: 1.05rem;
+            font-size: 0.95rem;
             letter-spacing: 2px;
             color: #fff;
             text-shadow: 0 0 10px var(--cyan);
         }
         .hud-badge {
             font-family: 'Orbitron', sans-serif;
-            font-size: 0.7rem;
-            padding: 4px 8px;
+            font-size: 0.65rem;
+            padding: 3px 6px;
             border-radius: 6px;
             background: rgba(0, 243, 255, 0.1);
             border: 1px solid var(--cyan);
             color: var(--cyan);
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
         .hud-dot {
-            width: 7px; height: 7px; border-radius: 50%;
+            width: 6px; height: 6px; border-radius: 50%;
             background: var(--cyan);
             box-shadow: 0 0 8px var(--cyan);
             animation: pulse 1.5s infinite;
         }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-        #coreContainer {
-            z-index: 10;
+        #mainStage {
+            flex: 1;
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             position: relative;
-            width: 240px;
-            height: 240px;
+            margin: 8px 0;
+        }
+        #coreContainer {
+            position: relative;
+            width: 180px;
+            height: 180px;
             display: flex;
             align-items: center;
             justify-content: center;
         }
         .ring { position: absolute; border-radius: 50%; pointer-events: none; }
         .ring-1 {
-            width: 230px; height: 230px;
+            width: 170px; height: 170px;
             border-top: 2px solid var(--cyan);
             border-bottom: 2px solid var(--purple);
             animation: spinCW 12s linear infinite;
         }
         .ring-2 {
-            width: 190px; height: 190px;
+            width: 140px; height: 140px;
             border-left: 2px solid var(--cyan);
             animation: spinCCW 8s linear infinite;
         }
         .quantum-orb {
-            width: 110px;
-            height: 110px;
+            width: 90px;
+            height: 90px;
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%);
-            box-shadow: 0 0 45px var(--cyan), inset 0 0 20px #fff;
+            box-shadow: 0 0 35px var(--cyan), inset 0 0 15px #fff;
             transition: transform 0.15s ease, box-shadow 0.15s ease;
         }
         .quantum-orb.speaking {
             animation: voicePulse 0.9s infinite alternate ease-in-out;
-            box-shadow: 0 0 80px var(--cyan), 0 0 110px var(--purple);
+            box-shadow: 0 0 60px var(--cyan), 0 0 90px var(--purple);
         }
-        .quantum-orb.user-active {
+        .quantum-orb.listening {
             transform: scale(1.15);
-            box-shadow: 0 0 80px #00ffcc;
+            box-shadow: 0 0 60px #00ffcc;
         }
         @keyframes spinCW { 100% { transform: rotate(360deg); } }
         @keyframes spinCCW { 100% { transform: rotate(-360deg); } }
@@ -113,36 +123,50 @@
             to { transform: scale(1.2); filter: brightness(1.3); }
         }
 
-        #actionCard {
-            z-index: 15;
+        #docViewer {
+            display: none;
             width: 100%;
-            max-width: 360px;
+            height: 100%;
+            background: rgba(3, 7, 20, 0.95);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px;
+            overflow-y: auto;
+            color: #d1e8ff;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            user-select: text;
+            flex-direction: column;
+        }
+
+        #actionCard {
+            position: absolute;
+            z-index: 15;
+            width: 90%;
             background: var(--glass);
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 10px;
+            border-radius: 12px;
+            padding: 8px;
             display: none;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(14px);
+            gap: 6px;
         }
         #actionCard img {
             width: 100%;
-            border-radius: 10px;
-            max-height: 200px;
+            border-radius: 8px;
+            max-height: 180px;
             object-fit: cover;
-            border: 1px solid rgba(0, 243, 255, 0.3);
         }
         .action-btns { display: flex; gap: 8px; width: 100%; }
         .holo-btn {
             flex: 1;
             font-family: 'Orbitron', sans-serif;
-            font-size: 0.72rem;
+            font-size: 0.65rem;
             background: rgba(0, 243, 255, 0.15);
             color: var(--cyan);
-            padding: 8px;
-            border-radius: 8px;
+            padding: 6px;
+            border-radius: 6px;
             text-align: center;
             text-decoration: none;
             border: 1px solid var(--cyan);
@@ -155,74 +179,97 @@
         }
 
         #controls {
-            z-index: 10;
+            z-index: 20;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             width: 100%;
-            max-width: 420px;
+            max-width: 480px;
+            background: var(--glass);
+            padding: 10px 14px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
         }
         #statusLabel {
-            font-size: 0.95rem;
-            letter-spacing: 0.5px;
+            font-size: 0.88rem;
             color: #d1e8ff;
             font-weight: 600;
             text-align: center;
-            min-height: 24px;
-            max-width: 380px;
+            width: 100%;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
-        #callToggle {
-            width: 74px;
-            height: 74px;
+        .btn-row { display: flex; align-items: center; gap: 16px; }
+        .round-btn {
+            width: 58px; height: 58px;
             border-radius: 50%;
-            background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
             border: 2px solid #00ffcc;
+            background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
             color: #030611;
-            font-size: 1.8rem;
+            font-size: 1.5rem;
             cursor: pointer;
-            box-shadow: 0 0 30px rgba(0, 255, 204, 0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
+            display: flex; align-items: center; justify-content: center;
             transition: all 0.2s ease;
         }
-        #callToggle.active {
+        .round-btn.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
             border-color: var(--red);
-            box-shadow: 0 0 40px rgba(255, 0, 85, 0.7);
+            box-shadow: 0 0 25px rgba(255, 0, 85, 0.6);
+        }
+        .stop-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            border: 1px solid var(--red);
+            background: rgba(255, 0, 85, 0.2);
+            color: var(--red);
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
         }
     </style>
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">NEURAL v3.0</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">ZERO-ECHO v4.0</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
             <span id="pingHud">AZURE // SWARA</span>
         </div>
     </header>
 
-    <div id="coreContainer">
-        <div class="ring ring-1"></div>
-        <div class="ring ring-2"></div>
-        <div id="orb" class="quantum-orb"></div>
-    </div>
+    <div id="mainStage">
+        <div id="coreContainer">
+            <div class="ring ring-1"></div>
+            <div class="ring ring-2"></div>
+            <div id="orb" class="quantum-orb"></div>
+        </div>
 
-    <div id="actionCard">
-        <img id="cardImage" src="" alt="Projection" />
-        <div class="action-btns">
-            <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD</a>
-            <button onclick="closeActionCard()" class="holo-btn close-btn">❌ HATAO</button>
+        <div id="docViewer">
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-family:'Orbitron'; color:var(--cyan); font-size:0.75rem;">📋 LIVE PROJECTION</span>
+                <button onclick="closeDocViewer()" style="background:none; border:none; color:var(--red); font-weight:bold; cursor:pointer;">✖ HATAO</button>
+            </div>
+            <div id="docContent"></div>
+        </div>
+
+        <div id="actionCard">
+            <img id="cardImage" src="" alt="Projection" />
+            <div class="action-btns">
+                <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD</a>
+                <button onclick="closeActionCard()" class="holo-btn close-btn">❌ HATAO</button>
+            </div>
         </div>
     </div>
 
     <div id="controls">
         <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
-        <button id="callToggle" onclick="toggleCall()">📞</button>
+        <div class="btn-row">
+            <button id="callToggle" class="round-btn" onclick="toggleCall()">📞</button>
+            <button class="stop-btn" onclick="interruptPlayback()" title="तुरंत रोकें">⏹</button>
+        </div>
     </div>
 
     <script>
@@ -232,22 +279,22 @@
         let audioChunks = [];
         let isCalling = false;
         let isMayaSpeaking = false;
+        let activeAudio = null;
         let silenceTimer = null;
         let animFrameId = null;
 
         const orb = document.getElementById('orb');
+        const coreContainer = document.getElementById('coreContainer');
         const statusLabel = document.getElementById('statusLabel');
         const actionCard = document.getElementById('actionCard');
         const cardImage = document.getElementById('cardImage');
         const downloadBtn = document.getElementById('downloadBtn');
-        const pingHud = document.getElementById('pingHud');
+        const docViewer = document.getElementById('docViewer');
+        const docContent = document.getElementById('docContent');
 
         async function toggleCall() {
-            if (!isCalling) {
-                await startLiveCall();
-            } else {
-                stopLiveCall();
-            }
+            if (!isCalling) await startLiveCall();
+            else stopLiveCall();
         }
 
         async function startLiveCall() {
@@ -260,23 +307,21 @@
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
                     statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss...";
-                    await startBeepFreeVoiceLink();
+                    await initHardwareAudio();
                 };
 
                 ws.onmessage = async (e) => {
                     const msg = JSON.parse(e.data);
                     if (msg.type === 'audio') {
-                        playIncomingAudio(msg.data);
+                        playSingleAudio(msg.data);
                     } else if (msg.type === 'transcript') {
                         statusLabel.innerText = `Boss: "${msg.text}"`;
                     } else if (msg.type === 'reply_text') {
                         statusLabel.innerText = `Maya: "${msg.text}"`;
+                    } else if (msg.type === 'document') {
+                        showDocument(msg.content);
                     } else if (msg.type === 'image') {
                         showActionImage(msg.url);
-                    } else if (msg.type === 'ping') {
-                        const pingMs = Math.round((Date.now() - (msg.timestamp * 1000)));
-                        pingHud.innerText = `PING: ${Math.max(10, pingMs)}ms`;
-                        ws.send(JSON.stringify({ type: 'pong' }));
                     }
                 };
 
@@ -284,12 +329,12 @@
                 ws.onerror = () => stopLiveCall();
 
             } catch (err) {
-                alert("Live Link Init Error: " + err);
+                alert("Connection Error: " + err);
                 stopLiveCall();
             }
         }
 
-        async function startBeepFreeVoiceLink() {
+        async function initHardwareAudio() {
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
@@ -299,9 +344,9 @@
                     }
                 });
 
-                const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const source = micAudioCtx.createMediaStreamSource(mediaStream);
-                const analyser = micAudioCtx.createAnalyser();
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(mediaStream);
+                const analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 256;
                 source.connect(analyser);
 
@@ -309,25 +354,28 @@
                 audioChunks = [];
 
                 mediaRecorder.ondataavailable = (e) => {
-                    if (e.data && e.data.size > 0) {
-                        audioChunks.push(e.data);
-                    }
+                    if (e.data && e.data.size > 0) audioChunks.push(e.data);
                 };
 
                 mediaRecorder.onstop = () => {
+                    // सिर्फ तभी भेजें जब माया न बोल रही हो
                     if (audioChunks.length > 0 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
                         const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
                         audioChunks = [];
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            const base64Audio = reader.result.split(',')[1];
-                            ws.send(JSON.stringify({
-                                type: 'audio_blob',
-                                data: base64Audio
-                            }));
-                        };
-                        reader.readAsDataURL(audioBlob);
+                        
+                        // शोर/क्लिक्स फिल्टर (कम से कम 5KB)
+                        if (audioBlob.size > 5000) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const base64Audio = reader.result.split(',')[1];
+                                ws.send(JSON.stringify({ type: 'audio_blob', data: base64Audio }));
+                            };
+                            reader.readAsDataURL(audioBlob);
+                        }
+                    } else {
+                        audioChunks = [];
                     }
+
                     if (isCalling && !isMayaSpeaking) {
                         try { mediaRecorder.start(); } catch(e){}
                     }
@@ -335,9 +383,8 @@
 
                 mediaRecorder.start();
 
-                // Zero-Beep Smart VAD Loop
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                function monitorAudio() {
+                function monitorVoice() {
                     if (!isCalling) return;
                     analyser.getByteFrequencyData(dataArray);
 
@@ -345,34 +392,103 @@
                     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let avg = sum / dataArray.length;
 
-                    if (avg > 14 && !isMayaSpeaking) {
-                        orb.classList.add('user-active');
+                    // थ्रेशोल्ड 18: सांस/हल्के शोर को इग्नोर करेगा
+                    if (avg > 18) {
+                        if (isMayaSpeaking) interruptPlayback();
+                        orb.classList.add('listening');
                         clearTimeout(silenceTimer);
 
                         silenceTimer = setTimeout(() => {
-                            orb.classList.remove('user-active');
+                            orb.classList.remove('listening');
                             if (mediaRecorder && mediaRecorder.state === 'recording') {
                                 mediaRecorder.stop();
                             }
-                        }, 650);
+                        }, 700);
                     }
-
-                    animFrameId = requestAnimationFrame(monitorAudio);
+                    animFrameId = requestAnimationFrame(monitorVoice);
                 }
-                monitorAudio();
+                monitorVoice();
 
             } catch (err) {
-                console.error("Mic Access Error:", err);
+                console.error("Mic Error:", err);
                 statusLabel.innerText = "माइक्रोफ़ोन एक्सेस अस्वीकृत";
             }
         }
 
+        function playSingleAudio(b64Audio) {
+            interruptPlayback();
+            isMayaSpeaking = true;
+            orb.className = 'quantum-orb speaking';
+
+            // माया बोलते समय माइक पॉज़
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                try { mediaRecorder.pause(); } catch(e){}
+            }
+
+            activeAudio = new Audio("data:audio/mp3;base64," + b64Audio);
+            
+            const resumeMic = () => {
+                isMayaSpeaking = false;
+                orb.className = 'quantum-orb';
+                activeAudio = null;
+                if (mediaRecorder && mediaRecorder.state === 'paused') {
+                    try { mediaRecorder.resume(); } catch(e){}
+                }
+            };
+
+            activeAudio.onended = resumeMic;
+            activeAudio.onerror = resumeMic;
+            activeAudio.play().catch(e => {
+                console.log("Audio Play Error:", e);
+                resumeMic();
+            });
+        }
+
+        function interruptPlayback() {
+            if (activeAudio) {
+                activeAudio.pause();
+                activeAudio.currentTime = 0;
+                activeAudio = null;
+            }
+            isMayaSpeaking = false;
+            orb.className = 'quantum-orb';
+            if (mediaRecorder && mediaRecorder.state === 'paused') {
+                try { mediaRecorder.resume(); } catch(e){}
+            }
+        }
+
+        function showDocument(content) {
+            coreContainer.style.display = 'none';
+            docViewer.style.display = 'flex';
+            docContent.innerHTML = content.replace(/\n/g, '<br>');
+        }
+
+        function closeDocViewer() {
+            docViewer.style.display = 'none';
+            coreContainer.style.display = 'flex';
+        }
+
+        function showActionImage(url) {
+            actionCard.style.display = 'flex';
+            cardImage.src = url;
+            downloadBtn.href = url;
+        }
+
+        function closeActionCard() {
+            actionCard.style.display = 'none';
+            cardImage.src = '';
+        }
+
         function stopLiveCall() {
+            interruptPlayback();
             isCalling = false;
             document.getElementById('callToggle').classList.remove('active');
             document.getElementById('callToggle').innerText = '📞';
             statusLabel.innerText = "कॉल समाप्त // पुनः बात करने के लिए टैप करें";
             orb.className = 'quantum-orb';
+
+            closeDocViewer();
+            closeActionCard();
 
             if (animFrameId) cancelAnimationFrame(animFrameId);
             clearTimeout(silenceTimer);
@@ -386,32 +502,6 @@
             }
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
         }
-
-        function playIncomingAudio(b64Audio) {
-            isMayaSpeaking = true;
-            orb.classList.add('speaking');
-            const audio = new Audio("data:audio/mp3;base64," + b64Audio);
-            audio.onended = () => {
-                isMayaSpeaking = false;
-                orb.classList.remove('speaking');
-            };
-            audio.onerror = () => {
-                isMayaSpeaking = false;
-                orb.classList.remove('speaking');
-            };
-            audio.play().catch(e => console.log("Playback error:", e));
-        }
-
-        function showActionImage(url) {
-            actionCard.style.display = 'flex';
-            cardImage.src = url;
-            downloadBtn.href = url;
-        }
-
-        function closeActionCard() {
-            actionCard.style.display = 'none';
-            cardImage.src = '';
-        }
     </script>
 </body>
-</html>
+    </html>
