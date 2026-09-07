@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import time
 import json
 import base64
@@ -7,6 +8,7 @@ import asyncio
 import urllib.parse
 import httpx
 import edge_tts
+from typing import Dict, Any, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from groq import Groq
@@ -17,7 +19,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
-# --- Environment Configuration ---
+# --- Environment Setup ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -26,168 +28,284 @@ RENDER_APP_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
-MEMORY_FILE = "maya_memory.json"
-TASKS_FILE = "maya_tasks.json"
 STATE_FILE = "maya_state.json"
+TASKS_FILE = "maya_tasks.json"
 
-# --- Storage & Memory Helpers ---
-def load_memory() -> str:
-    if os.path.exists(MEMORY_FILE):
+# Active live WebSockets tracking for cross-alerts
+ACTIVE_WEBSOCKETS: List[WebSocket] = []
+
+# --- Persistent State Helpers ---
+def load_json(filepath: str, default: Any) -> Any:
+    if os.path.exists(filepath):
         try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                facts = json.load(f).get("facts", [])
-                if facts:
-                    return "PAST MEMORY OF BOSS:\n" + "\n".join([f"- {item}" for item in facts[-10:]])
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
             pass
-    return "No prior memory recorded yet."
+    return default
 
-def save_memory_fact(fact: str):
-    data = {"facts": []}
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = {"facts": []}
-    data.setdefault("facts", []).append(fact)
+def save_json(filepath: str, data: Any):
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Memory save error: {e}")
-
-def get_last_completed_task() -> str:
-    if os.path.exists(TASKS_FILE):
-        try:
-            with open(TASKS_FILE, "r", encoding="utf-8") as f:
-                tasks = json.load(f).get("completed", [])
-                if tasks:
-                    last = tasks[-1]
-                    return f"Recently completed task: {last.get('task')} -> Result: {last.get('summary')}"
-        except Exception:
-            pass
-    return ""
-
-def record_completed_task(task_desc: str, summary: str):
-    data = {"completed": []}
-    if os.path.exists(TASKS_FILE):
-        try:
-            with open(TASKS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = {"completed": []}
-    data.setdefault("completed", []).append({"task": task_desc, "summary": summary, "time": time.time()})
-    try:
-        with open(TASKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Task save error: {e}")
+        print(f"[STORAGE ERROR]: {e}")
 
 def get_boss_chat_id() -> str:
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f).get("boss_chat_id", "")
-        except Exception:
-            pass
-    return ""
+    return load_json(STATE_FILE, {}).get("boss_chat_id", "")
 
 def save_boss_chat_id(chat_id: str):
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump({"boss_chat_id": str(chat_id)}, f)
-    except Exception as e:
-        print(f"Chat ID save error: {e}")
+    data = load_json(STATE_FILE, {})
+    data["boss_chat_id"] = str(chat_id)
+    save_json(STATE_FILE, data)
 
-def build_system_prompt() -> str:
-    mem = load_memory()
-    last_task = get_last_completed_task()
-    return (
-        "You are Maya, an ultra-intelligent, sovereign female AI Meta-Agent for 'Boss'. "
-        "Converse in natural, sweet, crisp Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बताती हूँ'). "
-        "PRIMARY PROTOCOLS: "
-        "1. Active Voice Link: Keep replies very crisp, punchy, and conversational (1-2 lines maximum for speaking). "
-        "2. Never use robotic greetings repeatedly. Address Boss with high respect and energy. "
-        f"\n[PERSISTENT MEMORY]\n{mem}\n"
-        f"\n[BACKGROUND STATUS]\n{last_task}\n"
+# --- Cross-Platform Unified Dispatcher ---
+async def dispatch_to_telegram(text: str = None, photo_url: str = None, caption: str = ""):
+    chat_id = get_boss_chat_id()
+    if not chat_id or not TELEGRAM_BOT_TOKEN:
+        return
+    async with httpx.AsyncClient() as client:
+        try:
+            if photo_url:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": photo_url, "caption": caption or "✨ Visual Delivery"},
+                    timeout=15.0
+                )
+            if text:
+                chunks = [text[i:i+3800] for i in range(0, len(text), 3800)] if len(text) > 4000 else [text]
+                for ch in chunks:
+                    await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={"chat_id": chat_id, "text": ch},
+                        timeout=15.0
+                    )
+        except Exception as e:
+            print(f"[TELEGRAM DISPATCH ERROR]: {e}")
+
+# --- Autonomous Worker Engine with Dynamic Modification Support ---
+async def run_autonomous_worker(task_id: str, initial_prompt: str):
+    print(f"[AUTONOMOUS WORKER] Task {task_id} launched: {initial_prompt}")
+    tasks_data = load_json(TASKS_FILE, {"active": {}, "completed": []})
+    tasks_data["active"][task_id] = {
+        "prompt": initial_prompt,
+        "modifications": [],
+        "created_at": time.time(),
+        "status": "processing"
+    }
+    save_json(TASKS_FILE, tasks_data)
+
+    # Allow time for mid-conversation user modifications to queue
+    await asyncio.sleep(5)
+
+    # Reload fresh specifications including changes added by user mid-call
+    current_tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
+    task_info = current_tasks.get("active", {}).get(task_id, {})
+    mods = task_info.get("modifications", [])
+    
+    full_spec = initial_prompt
+    if mods:
+        full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
+
+    deep_prompt = (
+        f"You are Maya Sovereign Autonomous Worker.\n"
+        f"Goal: Execute complete, production-level, exhaustive delivery for:\n{full_spec}\n\n"
+        "Provide full code, architecture, steps, or exhaustive documentation in professional Hindi/Hinglish."
     )
 
-# --- Free Edge-TTS Neural Voice Engine ---
-async def generate_neural_speech(text: str) -> str:
-    """Microsoft Azure Neural Voice - Free & Unlimited"""
-    try:
-        clean_text = text.replace("*", "").replace("#", "").replace("`", "")
-        communicate = edge_tts.Communicate(clean_text, voice="hi-IN-SwaraNeural")
-        audio_stream = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_stream.write(chunk["data"])
-        return base64.b64encode(audio_stream.getvalue()).decode("utf-8")
-    except Exception as e:
-        print(f"[EDGE-TTS ERROR]: {e}")
-        return ""
-
-# --- Autonomous Background Task Engine ---
-async def execute_background_task(task_description: str):
-    print(f"[ORCHESTRATOR] Background task started: {task_description}")
-    generated_report = ""
-    prompt = (
-        f"You are Maya, an ultra-intelligent, professional AI Meta-Agent for Boss.\n"
-        f"Assignment: {task_description}\n"
-        f"Provide a comprehensive, high-value, deeply researched executive report in crisp, natural Hindi/Hinglish."
-    )
-
+    final_delivery = ""
     if gemini_client:
         try:
             res = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=prompt
+                contents=deep_prompt
             )
             if res and hasattr(res, "text") and res.text:
-                generated_report = res.text
-        except Exception as e:
-            print(f"[ORCHESTRATOR] Gemini task error: {e}")
+                final_delivery = res.text
+        except Exception:
+            pass
 
-    if not generated_report and groq_client:
+    if not final_delivery and groq_client:
         try:
             loop = asyncio.get_running_loop()
             chat = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are Maya executing an autonomous report for Boss. Write in Hindi/Hinglish."},
-                        {"role": "user", "content": task_description}
+                        {"role": "system", "content": "You are Maya Autonomous Worker. Deliver deep, production-grade output."},
+                        {"role": "user", "content": deep_prompt}
                     ],
                     model="openai/gpt-oss-20b"
                 )
             )
-            generated_report = chat.choices[0].message.content
+            final_delivery = chat.choices[0].message.content
         except Exception as e:
-            print(f"[ORCHESTRATOR] Groq task error: {e}")
+            print(f"[WORKER LLM ERROR]: {e}")
 
-    if not generated_report:
-        generated_report = "Boss, टास्क प्रोसेस करने में समस्या आई।"
+    if not final_delivery:
+        final_delivery = "Boss, टास्क प्रोसेस करने में त्रुटि आई। कृपया पुनः कमांड दें।"
 
-    summary = generated_report[:150] + "..."
-    record_completed_task(task_description, summary)
+    # Mark completed
+    current_tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
+    if task_id in current_tasks.get("active", {}):
+        del current_tasks["active"][task_id]
+    current_tasks.setdefault("completed", []).append({
+        "task_id": task_id,
+        "prompt": initial_prompt,
+        "result_preview": final_delivery[:150],
+        "time": time.time()
+    })
+    save_json(TASKS_FILE, current_tasks)
 
-    chat_id = get_boss_chat_id()
-    if chat_id and TELEGRAM_BOT_TOKEN:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        message_text = f"🚨 **TASK COMPLETED, BOSS!**\n\n🎯 **Task:** `{task_description}`\n\n📋 **Report:**\n\n{generated_report}"
-        chunks = [message_text[i:i+3800] for i in range(0, len(message_text), 3800)] if len(message_text) > 4000 else [message_text]
+    # 1. Deliver full result to Telegram
+    report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
+    await dispatch_to_telegram(text=report_msg)
 
-        async with httpx.AsyncClient() as client:
-            for ch in chunks:
-                try:
-                    await client.post(url, json={"chat_id": chat_id, "text": ch}, timeout=15.0)
-                except Exception as err:
-                    print(f"Telegram report delivery error: {err}")
+    # 2. Push alert to active live web call if connected
+    for ws in ACTIVE_WEBSOCKETS:
+        try:
+            await ws.send_json({
+                "type": "reply_text",
+                "text": f"Boss, बैकग्राउंड टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। मैंने पूरी रिपोर्ट टेलीग्राम पर भेज दी है।"
+            })
+        except Exception:
+            pass
 
-# --- Render Sleep-Proof Watchdog ---
+# --- Master Brain: Real-Time Intent & Context Classifier ---
+def extract_clean_json(text: str) -> Dict[str, Any]:
+    try:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(text)
+    except Exception:
+        return {}
+
+async def master_router(user_input: str) -> Dict[str, Any]:
+    tasks_data = load_json(TASKS_FILE, {"active": {}, "completed": []})
+    active_jobs = tasks_data.get("active", {})
+    active_summary = [{"id": k, "task": v.get("prompt")} for k, v in active_jobs.items()]
+
+    router_prompt = (
+        f"You are the executive Master Brain of Maya Sovereign OS.\n"
+        f"ACTIVE BACKGROUND TASKS: {json.dumps(active_summary, ensure_ascii=False)}\n"
+        f"BOSS INPUT: \"{user_input}\"\n\n"
+        "Analyze intent and return STRICT JSON with NO markdown:\n"
+        "{\n"
+        "  \"intent\": \"chat\" | \"new_heavy_task\" | \"modify_task\" | \"generate_image\",\n"
+        "  \"voice_response\": \"Strictly 1 natural, crisp sentence in Hindi/Hinglish to speak to Boss\",\n"
+        "  \"task_id\": \"id of active task if modify_task else empty\",\n"
+        "  \"task_payload\": \"full clean spec or image prompt\",\n"
+        "  \"screen_content\": \"structured text/code for HUD viewer or empty\"\n"
+        "}"
+    )
+
+    decision = {}
+    if groq_client:
+        try:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(
+                None,
+                lambda: groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are Maya Master Router. Output valid JSON only."},
+                        {"role": "user", "content": router_prompt}
+                    ],
+                    model="openai/gpt-oss-20b",
+                    response_format={"type": "json_object"}
+                )
+            )
+            decision = extract_clean_json(res.choices[0].message.content)
+        except Exception:
+            pass
+
+    if not decision and gemini_client:
+        try:
+            res = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=router_prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            decision = extract_clean_json(res.text)
+        except Exception:
+            pass
+
+    return decision or {
+        "intent": "chat",
+        "voice_response": "जी Boss, बताइए आगे क्या करना है?",
+        "task_payload": user_input,
+        "screen_content": ""
+    }
+
+async def generate_neural_speech(text: str) -> str:
+    try:
+        clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
+        communicate = edge_tts.Communicate(clean_text, voice="hi-IN-SwaraNeural")
+        audio_stream = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_stream.write(chunk["data"])
+        return base64.b64encode(audio_stream.getvalue()).decode("utf-8")
+    except Exception:
+        return ""
+
+# --- Telegram Bot Handler ---
+async def run_telegram_gateway():
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        save_boss_chat_id(str(chat_id))
+        await update.message.reply_text("नमस्ते Boss! Maya Sovereign Core सक्रिय है। सभी बैकग्राउंड टास्क्स और फाइल्स यहाँ रियल-टाइम में सिंक होंगी।")
+
+    async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        save_boss_chat_id(str(chat_id))
+        text = update.message.text.strip()
+
+        decision = await master_router(text)
+        intent = decision.get("intent", "chat")
+        payload = decision.get("task_payload") or text
+
+        if intent == "generate_image":
+            img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+            try:
+                await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, इमेज तैयार है:\n🎯 {payload}")
+            except Exception:
+                await update.message.reply_text(f"Boss, लिंक: {img_url}")
+
+        elif intent == "new_heavy_task":
+            tid = f"task_{int(time.time())}"
+            asyncio.create_task(run_autonomous_worker(tid, payload))
+            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल और रिपोर्ट भेज दूँगी।")
+
+        elif intent == "modify_task":
+            tid = decision.get("task_id")
+            tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
+            active = tasks.get("active", {})
+            target_id = tid if tid in active else (list(active.keys())[-1] if active else None)
+            if target_id:
+                active[target_id].setdefault("modifications", []).append(payload)
+                save_json(TASKS_FILE, tasks)
+                await update.message.reply_text(f"Boss, रनिंग टास्क `{active[target_id]['prompt'][:30]}...` में नया बदलाव जोड़ दिया गया है।")
+            else:
+                await update.message.reply_text("Boss, कोई एक्टिव टास्क नहीं मिला, मैं इसे नए टास्क के रूप में शुरू कर देती हूँ।")
+                asyncio.create_task(run_autonomous_worker(f"task_{int(time.time())}", payload))
+
+        else:
+            await update.message.reply_text(decision.get("voice_response", "जी Boss!"))
+
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+
+# --- Render Never-Sleep Watchdog ---
 @app.on_event("startup")
-async def startup_event():
+async def startup():
     async def self_ping():
         await asyncio.sleep(60)
         while True:
@@ -205,122 +323,28 @@ async def startup_event():
 
 @app.get("/health")
 async def health():
-    return {"status": "Sovereign Engine Active", "time": time.time()}
+    tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
+    return {"status": "Sovereign Master Active", "active_tasks_count": len(tasks.get("active", {}))}
 
-# --- Telegram Bot Handler ---
-async def run_telegram_gateway():
-    print("[TELEGRAM] Starting Sovereign Bot Gateway...")
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
-    async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        save_boss_chat_id(str(chat_id))
-        await update.message.reply_text("नमस्ते Boss! Maya Sovereign Link स्थापित हो चुका है।")
-
-    async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        save_boss_chat_id(str(chat_id))
-        text = update.message.text.strip()
-        lower_text = text.lower()
-
-        # Image Handling
-        image_triggers = ["image", "photo", "tasveer", "चित्र", "picture", "wallpaper"]
-        action_triggers = ["banao", "generate", "create", "dikhao", "send"]
-        if any(t in lower_text for t in image_triggers) and any(a in lower_text for a in action_triggers):
-            await update.message.reply_text("Boss, इमेज रेंडर हो रही है, बस कुछ सेकंड...")
-            clean_prompt = text
-            for w in ["maya", "generate karo", "generate", "image", "photo", "banao", "ek", "ki"]:
-                clean_prompt = clean_prompt.replace(w, "").replace(w.capitalize(), "")
-            clean_prompt = clean_prompt.strip() or text
-            img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(clean_prompt)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
-            try:
-                await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, आपकी इमेज तैयार है!\n\n🎯 Prompt: {text}")
-            except Exception:
-                await update.message.reply_text(f"Boss, यह रहा आपका इमेज लिंक:\n{img_url}")
-            return
-
-        # Background Research Task
-        if any(w in lower_text for w in ["background", "बैकग्राउंड", "रिसर्च करो", "research karo", "create website", "project"]):
-            asyncio.create_task(execute_background_task(text))
-            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। रिपोर्ट तैयार होते ही इसी चैट में भेजती हूँ।")
-            return
-
-        # Normal Chat
-        reply = ""
-        if gemini_client:
-            try:
-                response = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=text,
-                    config=types.GenerateContentConfig(system_instruction=build_system_prompt())
-                )
-                if response and hasattr(response, "text") and response.text:
-                    reply = response.text
-            except Exception:
-                pass
-
-        if not reply and groq_client:
-            try:
-                loop = asyncio.get_running_loop()
-                chat_completion = await loop.run_in_executor(
-                    None,
-                    lambda: groq_client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": build_system_prompt()},
-                            {"role": "user", "content": text}
-                        ],
-                        model="openai/gpt-oss-20b"
-                    )
-                )
-                reply = chat_completion.choices[0].message.content
-            except Exception as e:
-                print(f"[GROQ ERROR]: {e}")
-
-        if reply:
-            await update.message.reply_text(reply)
-        else:
-            await update.message.reply_text("Boss, सर्वर व्यस्त है। कृपया पुनः प्रयास करें।")
-
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
-
-# --- Real-Time Hybrid Voice Call Link ---
+# --- WebSocket Live Voice & Dynamic Executive Stream ---
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
     await ws.accept()
-    print("[WEBSOCKET] Realtime Call Link Connected")
+    ACTIVE_WEBSOCKETS.append(ws)
 
-    # Initial Voice Greeting via Swara Neural
-    welcome_text = "नमस्ते Boss! कॉल कनेक्ट हो चुकी है। कहिए, आज क्या प्लान है?"
+    welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
     welcome_audio = await generate_neural_speech(welcome_text)
     if welcome_audio:
         await ws.send_json({"type": "audio", "data": welcome_audio})
         await ws.send_json({"type": "reply_text", "text": welcome_text})
 
-    async def keep_alive():
-        try:
-            while True:
-                await asyncio.sleep(15)
-                await ws.send_json({"type": "ping", "timestamp": time.time()})
-        except Exception:
-            pass
-
-    asyncio.create_task(keep_alive())
-
     try:
         while True:
             data = await ws.receive_text()
             msg = json.loads(data)
-            msg_type = msg.get("type")
-
             user_query = ""
 
-            # 1. Audio Voice Input via Groq Whisper
-            if msg_type == "audio_blob" and groq_client:
+            if msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
                     audio_file = io.BytesIO(wav_bytes)
@@ -336,87 +360,54 @@ async def websocket_live_call(ws: WebSocket):
                 except Exception as e:
                     print(f"[WHISPER ERROR]: {e}")
 
-            elif msg_type == "query":
+            elif msg.get("type") == "query":
                 user_query = msg.get("text", "").strip()
 
             if user_query:
-                # Transcribed text UI par display karo
                 await ws.send_json({"type": "transcript", "text": user_query})
-                lower_q = user_query.lower()
 
-                # Action Check 1: Image Generation
-                if any(t in lower_q for t in ["image", "photo", "tasveer", "चित्र"]) and any(a in lower_q for a in ["banao", "generate", "dikhao", "create"]):
-                    clean_p = user_query
-                    for w in ["maya", "generate karo", "generate", "image", "photo", "banao", "ek", "ki"]:
-                        clean_p = clean_p.replace(w, "").replace(w.capitalize(), "")
-                    clean_p = clean_p.strip() or user_query
-                    img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(clean_p)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                decision = await master_router(user_query)
+                intent = decision.get("intent", "chat")
+                voice_msg = decision.get("voice_response", "जी Boss!")
+                payload = decision.get("task_payload") or user_query
+                screen_doc = decision.get("screen_content", "")
+
+                # 1. Heavy Project / Website / Research Trigger
+                if intent == "new_heavy_task":
+                    tid = f"task_{int(time.time())}"
+                    asyncio.create_task(run_autonomous_worker(tid, payload))
+
+                # 2. Mid-Call Task Editing
+                elif intent == "modify_task":
+                    tid = decision.get("task_id")
+                    tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
+                    active = tasks.get("active", {})
+                    target_id = tid if tid in active else (list(active.keys())[-1] if active else None)
+                    if target_id:
+                        active[target_id].setdefault("modifications", []).append(payload)
+                        save_json(TASKS_FILE, tasks)
+                        voice_msg = "Boss, बैकग्राउंड टास्क में यह नया बदलाव जोड़ दिया है।"
+
+                # 3. Image Generation
+                elif intent == "generate_image":
+                    img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
                     await ws.send_json({"type": "image", "url": img_url})
+                    asyncio.create_task(dispatch_to_telegram(photo_url=img_url, caption=f"✨ Live Image: {payload}"))
 
-                    # Telegram Sync
-                    chat_id = get_boss_chat_id()
-                    if chat_id and TELEGRAM_BOT_TOKEN:
-                        async def sync_photo():
-                            async with httpx.AsyncClient() as client:
-                                try:
-                                    await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto", json={
-                                        "chat_id": chat_id, "photo": img_url, "caption": f"✨ Boss, Live Call Image!\n🎯 {user_query}"
-                                    }, timeout=15.0)
-                                except Exception: pass
-                        asyncio.create_task(sync_photo())
+                # 4. Long Script/Report Projection
+                if screen_doc:
+                    await ws.send_json({"type": "document", "content": screen_doc})
+                    asyncio.create_task(dispatch_to_telegram(text=f"📋 **LIVE SCRIPT / PROJECTION**\n\n{screen_doc}"))
 
-                    maya_reply = "Boss, स्क्रीन पर देखिए, इमेज तैयार कर दी है और टेलीग्राम पर भी भेज दी है।"
-                
-                # Action Check 2: Background Tasks
-                elif any(w in lower_q for w in ["background", "रिसर्च करो", "project", "banao"]):
-                    asyncio.create_task(execute_background_task(user_query))
-                    maya_reply = "Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिपोर्ट टेलीग्राम पर भेज दूँगी।"
-
-                # Action Check 3: General Intelligence via Gemini / Groq Text
-                else:
-                    maya_reply = ""
-                    if gemini_client:
-                        try:
-                            res = gemini_client.models.generate_content(
-                                model="gemini-2.5-flash",
-                                contents=user_query,
-                                config=types.GenerateContentConfig(system_instruction=build_system_prompt())
-                            )
-                            if res and hasattr(res, "text") and res.text:
-                                maya_reply = res.text
-                        except Exception:
-                            pass
-
-                    if not maya_reply and groq_client:
-                        try:
-                            loop = asyncio.get_running_loop()
-                            completion = await loop.run_in_executor(
-                                None,
-                                lambda: groq_client.chat.completions.create(
-                                    messages=[
-                                        {"role": "system", "content": build_system_prompt()},
-                                        {"role": "user", "content": user_query}
-                                    ],
-                                    model="openai/gpt-oss-20b"
-                                )
-                            )
-                            maya_reply = completion.choices[0].message.content
-                        except Exception as e:
-                            print(f"[GROQ CHAT ERROR]: {e}")
-
-                    if not maya_reply:
-                        maya_reply = "जी Boss, बताइए मैं आपकी क्या सहायता कर सकती हूँ?"
-
-                # UI Update & Neural Voice Stream
-                await ws.send_json({"type": "reply_text", "text": maya_reply})
-                audio_b64 = await generate_neural_speech(maya_reply)
-                if audio_b64:
-                    await ws.send_json({"type": "audio", "data": audio_b64})
+                # 5. Crisp Voice Output
+                await ws.send_json({"type": "reply_text", "text": voice_msg})
+                speech_b64 = await generate_neural_speech(voice_msg)
+                if speech_b64:
+                    await ws.send_json({"type": "audio", "data": speech_b64})
 
     except WebSocketDisconnect:
-        print("[WEBSOCKET] Live call disconnected")
-    except Exception as e:
-        print(f"[WEBSOCKET ERROR]: {e}")
+        if ws in ACTIVE_WEBSOCKETS:
+            ACTIVE_WEBSOCKETS.remove(ws)
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -424,4 +415,4 @@ async def home():
     if os.path.exists(html_path):
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>Maya Sovereign OS Online</h1>"
+    return "<h1>Maya Sovereign OS Active</h1>"
