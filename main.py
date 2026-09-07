@@ -144,17 +144,14 @@ async def execute_background_task(task_description: str):
     if not generated_report:
         generated_report = "Boss, टास्क प्रोसेस करने में तकनीकी समस्या आई। कृपया पुनः कमांड दें।"
 
-    # Save to memory & history
     summary = generated_report[:150] + "..."
     record_completed_task(task_description, summary)
 
-    # Dispatch to Boss on Telegram
     chat_id = get_boss_chat_id()
     if chat_id and TELEGRAM_BOT_TOKEN:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         message_text = f"🚨 **TASK COMPLETED, BOSS!**\n\n🎯 **Task:** `{task_description}`\n\n📋 **Report:**\n\n{generated_report}"
         
-        # Telegram 4096 character chunking safety
         chunks = [message_text[i:i+3800] for i in range(0, len(message_text), 3800)] if len(message_text) > 4000 else [message_text]
 
         async with httpx.AsyncClient() as client:
@@ -391,6 +388,7 @@ async def websocket_live_call(ws: WebSocket):
                         msg = json.loads(data)
                         msg_type = msg.get("type")
 
+                        # Text Query Input
                         if msg_type == "query":
                             text = msg.get("text", "").strip()
                             if text:
@@ -399,7 +397,7 @@ async def websocket_live_call(ws: WebSocket):
                                     turn_complete=True
                                 )
 
-                        # 1. Beep-Free Real-time Native PCM Stream
+                        # Native PCM Stream (if client sends raw buffer)
                         elif msg_type == "audio_pcm":
                             raw_pcm_bytes = base64.b64decode(msg.get("data", ""))
                             if raw_pcm_bytes:
@@ -407,7 +405,7 @@ async def websocket_live_call(ws: WebSocket):
                                     media_chunks=[types.Blob(data=raw_pcm_bytes, mime_type="audio/pcm;rate=16000")]
                                 )
 
-                        # 2. Hybrid Fallback (Audio Blob -> Groq Whisper)
+                        # Zero-Beep Voice Processing (Audio Blob -> Groq Whisper)
                         elif msg_type == "audio_blob" and groq_client:
                             try:
                                 wav_bytes = base64.b64decode(msg.get("data"))
@@ -422,7 +420,9 @@ async def websocket_live_call(ws: WebSocket):
                                 )
                                 user_text = transcription.text.strip()
                                 if user_text:
+                                    # Send detected text to Web UI to display
                                     await ws.send_json({"type": "transcript", "text": user_text})
+                                    # Forward query directly to Maya Live Session
                                     await session.send_client_content(
                                         turns=[types.Content(role="user", parts=[types.Part(text=user_text)])],
                                         turn_complete=True
@@ -459,10 +459,10 @@ async def websocket_live_call(ws: WebSocket):
                                         prompt = call.args.get("prompt", "futuristic art")
                                         img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
                                         
-                                        # Display on Web Dashboard Screen
+                                        # 1. Web Dashboard Projection
                                         await ws.send_json({"type": "image", "url": img_url})
 
-                                        # Cross-Platform Sync: Auto-send to Boss on Telegram
+                                        # 2. Cross-Platform Auto Sync to Telegram
                                         chat_id = get_boss_chat_id()
                                         if chat_id and TELEGRAM_BOT_TOKEN:
                                             async def forward_to_telegram(c_id, url, pr):
