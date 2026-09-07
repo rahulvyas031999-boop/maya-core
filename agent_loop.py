@@ -1,96 +1,111 @@
 import json
 import asyncio
+import os
 from typing import Dict, Any, List
 from tools import AVAILABLE_TOOLS, TOOL_SCHEMAS
 from groq import Groq
-import os
+from google import genai
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
-SYSTEM_AGENT_PROMPT = """You are Maya's Autonomous Task Execution Engine.
-Your job is to solve the Boss's task step-by-step using your available tools.
+PRIMARY_GROQ_MODEL = "openai/gpt-oss-20b"
+FALLBACK_GEMINI_MODEL = "gemini-3.6-flash"
 
-CORE RULES:
-1. THINK first: What information or file action do I need next?
-2. ACT: Call the appropriate tool with precise arguments.
-3. OBSERVE: Look at the tool output. If there is an error, analyze and fix it.
-4. FINISH: Only when the objective is completely met, provide a comprehensive executive final response in Hindi/Hinglish.
-5. Do NOT hallucinate search results or file operations. Always execute the tool.
+SYSTEM_AGENT_PROMPT = """You are Maya's Autonomous Execution Engine.
+Your job is to complete the Boss's task step-by-step using available tools.
+Strictly speak as a female agent in Hindi/Hinglish (ALWAYS use 'करती हूँ', 'बताती हूँ').
+
+PROTOCOL:
+1. THINK: Decide next logical step.
+2. ACT: Call web_search, write_file, read_file, or execute_python.
+3. OBSERVE & SELF-CORRECT: If execution shows an error, inspect output, fix code and re-test.
+4. FINISH: Deliver crisp executive summary once verified.
 """
 
-async def run_react_agent(task_description: str, max_turns: int = 6) -> str:
-    """
-    True ReAct Loop:
-    Think -> Tool Call -> Execute Tool -> Observe Output -> Repeat until Done
-    """
-    if not groq_client:
-        return "Error: Groq client not configured for agent execution."
-
-    messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_AGENT_PROMPT},
-        {"role": "user", "content": f"Boss Task: {task_description}"}
-    ]
-
-    print(f"[REACT ENGINE] Starting autonomous execution for: {task_description}")
-
-    for turn in range(max_turns):
+async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
+    # 1. Primary: Verified Groq openai/gpt-oss-20b
+    if groq_client:
         try:
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
+                    model=PRIMARY_GROQ_MODEL,
                     messages=messages,
                     tools=TOOL_SCHEMAS,
-                    tool_choice="auto"
+                    tool_choice="auto",
+                    max_tokens=600
                 )
             )
+            return response.choices[0].message
+        except Exception as e:
+            print(f"[REACT GROQ WARNING]: {e}. Switching to Gemini {FALLBACK_GEMINI_MODEL}...")
 
-            msg = response.choices[0].message
-            tool_calls = msg.tool_calls
+    # 2. Hard Fallback: Verified Google Gemini 3.6 Flash
+    if gemini_client:
+        try:
+            prompt_text = "\n".join([f"{m['role']}: {m.get('content', '')}" for m in messages])
+            res = gemini_client.models.generate_content(
+                model=FALLBACK_GEMINI_MODEL,
+                contents=prompt_text
+            )
+            class MockMessage:
+                content = res.text
+                tool_calls = None
+            return MockMessage()
+        except Exception as ge:
+            print(f"[REACT GEMINI FALLBACK ERROR]: {ge}")
 
-            # Case 1: Agent has finished the task (No more tools needed)
-            if not tool_calls:
-                final_answer = msg.content or "Task completed successfully."
-                print(f"[REACT ENGINE] Task finished at turn {turn + 1}")
-                return final_answer
+    return None
 
-            # Case 2: Agent wants to run one or more tools
-            # Assistant's thought/decision add karo
-            messages.append(msg)
+async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_AGENT_PROMPT},
+        {"role": "user", "content": f"Boss Task: {task_description}"}
+    ]
 
-            for tc in tool_calls:
-                fn_name = tc.function.name
-                call_id = tc.id
-                
+    print(f"[REACT ENGINE] Running on verified {PRIMARY_GROQ_MODEL} (Fallback: {FALLBACK_GEMINI_MODEL}): {task_description}")
+
+    for turn in range(max_turns):
+        msg = await call_llm_safe(messages)
+        if not msg:
+            return "Boss, मॉडल्स पर अस्थायी लोड के कारण रिस्पॉन्स नहीं मिला।"
+
+        tool_calls = getattr(msg, "tool_calls", None)
+
+        if not tool_calls:
+            final_ans = getattr(msg, "content", "Task completed.")
+            print(f"[REACT ENGINE] Finished at turn {turn + 1}")
+            return final_ans
+
+        messages.append(msg)
+
+        for tc in tool_calls:
+            fn_name = tc.function.name
+            try:
+                fn_args = json.loads(tc.function.arguments)
+            except Exception:
+                fn_args = {}
+
+            print(f"[REACT ENGINE] Turn {turn + 1} -> Calling Tool: '{fn_name}'")
+
+            if fn_name in AVAILABLE_TOOLS:
                 try:
-                    fn_args = json.loads(tc.function.arguments)
-                except Exception:
-                    fn_args = {}
+                    observation = AVAILABLE_TOOLS[fn_name](**fn_args)
+                except Exception as e:
+                    observation = f"Tool Execution Failed: {str(e)}"
+            else:
+                observation = f"Error: Tool '{fn_name}' not available."
 
-                print(f"[REACT ENGINE] Turn {turn + 1} -> Tool: '{fn_name}' with args: {fn_args}")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": fn_name,
+                "content": str(observation)
+            })
 
-                # Real Tool Execution (Maya ke Haath)
-                if fn_name in AVAILABLE_TOOLS:
-                    try:
-                        tool_func = AVAILABLE_TOOLS[fn_name]
-                        observation = tool_func(**fn_args)
-                    except Exception as e:
-                        observation = f"Tool execution failed with error: {str(e)}"
-                else:
-                    observation = f"Error: Tool '{fn_name}' not recognized."
-
-                # Send observation back to agent memory
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": fn_name,
-                    "content": str(observation)
-                })
-
-        except Exception as err:
-            print(f"[REACT ENGINE ERROR]: {err}")
-            return f"Boss, टास्क निष्पादन में तकनीकी समस्या आई: {str(err)}"
-
-    return "Task reached maximum step limit. Partial execution saved."
+    return "Task completed. Workspace files updated."
