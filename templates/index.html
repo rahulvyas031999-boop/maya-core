@@ -233,10 +233,10 @@
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">ZERO-ECHO v4.0</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">INSTANT-LINK v5.0</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
-            <span id="pingHud">AZURE // SWARA</span>
+            <span id="pingHud">EDGE // READY</span>
         </div>
     </header>
 
@@ -274,14 +274,13 @@
 
     <script>
         let ws = null;
-        let mediaStream = null;
-        let mediaRecorder = null;
-        let audioChunks = [];
         let isCalling = false;
         let isMayaSpeaking = false;
         let activeAudio = null;
-        let silenceTimer = null;
-        let animFrameId = null;
+        let speechRecognizer = null;
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
 
         const orb = document.getElementById('orb');
         const coreContainer = document.getElementById('coreContainer');
@@ -291,6 +290,7 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const docViewer = document.getElementById('docViewer');
         const docContent = document.getElementById('docContent');
+        const pingHud = document.getElementById('pingHud');
 
         async function toggleCall() {
             if (!isCalling) await startLiveCall();
@@ -307,7 +307,7 @@
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
                     statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss...";
-                    await initHardwareAudio();
+                    initSpeechInput();
                 };
 
                 ws.onmessage = async (e) => {
@@ -334,22 +334,69 @@
             }
         }
 
-        async function initHardwareAudio() {
+        // HACK 1: Browser-Native Speech Recognition (Zero Audio Upload Lag)
+        function initSpeechInput() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (SpeechRecognition) {
+                pingHud.innerText = "NATIVE // RECOG";
+                speechRecognizer = new SpeechRecognition();
+                speechRecognizer.continuous = true;
+                speechRecognizer.interimResults = true;
+                speechRecognizer.lang = 'hi-IN';
+
+                speechRecognizer.onresult = (event) => {
+                    if (isMayaSpeaking) return; // Maya बोल रही हो तो इनपुट छोड़ दो
+
+                    let interimTranscript = '';
+                    let finalTranscript = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        if (event.results[i].isFinal) {
+                            finalTranscript += event.results[i][0].transcript;
+                        } else {
+                            interimTranscript += event.results[i][0].transcript;
+                        }
+                    }
+
+                    const liveText = (finalTranscript || interimTranscript).trim();
+                    if (liveText) {
+                        orb.classList.add('listening');
+                        statusLabel.innerText = `Boss: "${liveText}"`;
+                    }
+
+                    if (finalTranscript.trim().length > 1) {
+                        orb.classList.remove('listening');
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            // सीधा 50-byte टेक्स्ट भेजना, कोई भारी ऑडियो अपलोड नहीं
+                            ws.send(JSON.stringify({ type: 'query', text: finalTranscript.trim() }));
+                        }
+                    }
+                };
+
+                speechRecognizer.onerror = (err) => {
+                    console.log("Speech Recognition Note:", err.error);
+                };
+
+                speechRecognizer.onend = () => {
+                    if (isCalling && !isMayaSpeaking) {
+                        try { speechRecognizer.start(); } catch(e){}
+                    }
+                };
+
+                try { speechRecognizer.start(); } catch(e){}
+            } else {
+                // Fallback: Agar browser me Web Speech API na ho to Audio Blob mode
+                pingHud.innerText = "FALLBACK // ASR";
+                initAudioRecorderFallback();
+            }
+        }
+
+        async function initAudioRecorderFallback() {
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    }
+                    audio: { echoCancellation: true, noiseSuppression: true }
                 });
-
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const source = audioCtx.createMediaStreamSource(mediaStream);
-                const analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 256;
-                source.connect(analyser);
-
                 mediaRecorder = new MediaRecorder(mediaStream);
                 audioChunks = [];
 
@@ -358,89 +405,62 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    // सिर्फ तभी भेजें जब माया न बोल रही हो
                     if (audioChunks.length > 0 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const blob = new Blob(audioChunks, { type: 'audio/wav' });
                         audioChunks = [];
-                        
-                        // शोर/क्लिक्स फिल्टर (कम से कम 5KB)
-                        if (audioBlob.size > 5000) {
+                        if (blob.size > 5000) {
                             const reader = new FileReader();
                             reader.onloadend = () => {
-                                const base64Audio = reader.result.split(',')[1];
-                                ws.send(JSON.stringify({ type: 'audio_blob', data: base64Audio }));
+                                ws.send(JSON.stringify({ type: 'audio_blob', data: reader.result.split(',')[1] }));
                             };
-                            reader.readAsDataURL(audioBlob);
+                            reader.readAsDataURL(blob);
                         }
-                    } else {
-                        audioChunks = [];
                     }
-
                     if (isCalling && !isMayaSpeaking) {
                         try { mediaRecorder.start(); } catch(e){}
                     }
                 };
-
                 mediaRecorder.start();
-
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                function monitorVoice() {
-                    if (!isCalling) return;
-                    analyser.getByteFrequencyData(dataArray);
-
-                    let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-                    let avg = sum / dataArray.length;
-
-                    // थ्रेशोल्ड 18: सांस/हल्के शोर को इग्नोर करेगा
-                    if (avg > 18) {
-                        if (isMayaSpeaking) interruptPlayback();
-                        orb.classList.add('listening');
-                        clearTimeout(silenceTimer);
-
-                        silenceTimer = setTimeout(() => {
-                            orb.classList.remove('listening');
-                            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                                mediaRecorder.stop();
-                            }
-                        }, 700);
-                    }
-                    animFrameId = requestAnimationFrame(monitorVoice);
-                }
-                monitorVoice();
-
-            } catch (err) {
-                console.error("Mic Error:", err);
-                statusLabel.innerText = "माइक्रोफ़ोन एक्सेस अस्वीकृत";
+            } catch(e) {
+                statusLabel.innerText = "माइक एक्सेस नहीं मिला";
             }
         }
 
+        // Single Audio Lock & Hardware Pause (Zero Echo)
         function playSingleAudio(b64Audio) {
             interruptPlayback();
             isMayaSpeaking = true;
             orb.className = 'quantum-orb speaking';
 
-            // माया बोलते समय माइक पॉज़
+            if (speechRecognizer) {
+                try { speechRecognizer.stop(); } catch(e){}
+            }
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 try { mediaRecorder.pause(); } catch(e){}
             }
 
             activeAudio = new Audio("data:audio/mp3;base64," + b64Audio);
-            
-            const resumeMic = () => {
+
+            const resumeListening = () => {
                 isMayaSpeaking = false;
                 orb.className = 'quantum-orb';
                 activeAudio = null;
-                if (mediaRecorder && mediaRecorder.state === 'paused') {
-                    try { mediaRecorder.resume(); } catch(e){}
+
+                if (isCalling) {
+                    if (speechRecognizer) {
+                        try { speechRecognizer.start(); } catch(e){}
+                    }
+                    if (mediaRecorder && mediaRecorder.state === 'paused') {
+                        try { mediaRecorder.resume(); } catch(e){}
+                    }
                 }
             };
 
-            activeAudio.onended = resumeMic;
-            activeAudio.onerror = resumeMic;
+            activeAudio.onended = resumeListening;
+            activeAudio.onerror = resumeListening;
             activeAudio.play().catch(e => {
-                console.log("Audio Play Error:", e);
-                resumeMic();
+                console.log("Audio play error:", e);
+                resumeListening();
             });
         }
 
@@ -452,8 +472,14 @@
             }
             isMayaSpeaking = false;
             orb.className = 'quantum-orb';
-            if (mediaRecorder && mediaRecorder.state === 'paused') {
-                try { mediaRecorder.resume(); } catch(e){}
+
+            if (isCalling) {
+                if (speechRecognizer) {
+                    try { speechRecognizer.start(); } catch(e){}
+                }
+                if (mediaRecorder && mediaRecorder.state === 'paused') {
+                    try { mediaRecorder.resume(); } catch(e){}
+                }
             }
         }
 
@@ -490,9 +516,10 @@
             closeDocViewer();
             closeActionCard();
 
-            if (animFrameId) cancelAnimationFrame(animFrameId);
-            clearTimeout(silenceTimer);
-
+            if (speechRecognizer) {
+                try { speechRecognizer.stop(); } catch(e){}
+                speechRecognizer = null;
+            }
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 try { mediaRecorder.stop(); } catch(e){}
             }
