@@ -14,8 +14,9 @@ from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-app = FastAPI(title="Maya Sovereign OS")
+app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
+# --- Environment Configuration ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -99,28 +100,71 @@ def save_boss_chat_id(chat_id: str):
     except Exception as e:
         print(f"Chat ID save error: {e}")
 
-# --- Background Task Orchestrator ---
+# --- Autonomous Background Task Engine ---
 async def execute_background_task(task_description: str):
-    print(f"[ORCHESTRATOR] Starting background execution for: {task_description}")
-    await asyncio.sleep(8)
+    print(f"[ORCHESTRATOR] Autonomous execution started: {task_description}")
     
-    summary = f"Project '{task_description}' successfully created, compiled, and verified."
+    generated_report = ""
+    prompt = (
+        f"You are Maya, an ultra-intelligent, professional sovereign AI meta-agent for Boss.\n"
+        f"Assignment: {task_description}\n"
+        f"Provide a comprehensive, high-value, deeply researched, professional executive report in crisp, natural Hindi/Hinglish."
+    )
+
+    # 1. Primary Generation: Gemini 3.6 Flash
+    if gemini_client:
+        try:
+            res = gemini_client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt
+            )
+            if res and hasattr(res, "text") and res.text:
+                generated_report = res.text
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Gemini primary task execution error: {e}")
+
+    # 2. Fallback Generation: Groq openai/gpt-oss-20b
+    if not generated_report and groq_client:
+        try:
+            loop = asyncio.get_running_loop()
+            chat = await loop.run_in_executor(
+                None,
+                lambda: groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are Maya executing an autonomous background report for Boss. Write in Hindi/Hinglish."},
+                        {"role": "user", "content": task_description}
+                    ],
+                    model="openai/gpt-oss-20b"
+                )
+            )
+            generated_report = chat.choices[0].message.content
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Groq fallback task execution error: {e}")
+
+    if not generated_report:
+        generated_report = "Boss, टास्क प्रोसेस करने में तकनीकी समस्या आई। कृपया पुनः कमांड दें।"
+
+    # Save to memory & history
+    summary = generated_report[:150] + "..."
     record_completed_task(task_description, summary)
 
+    # Dispatch to Boss on Telegram
     chat_id = get_boss_chat_id()
     if chat_id and TELEGRAM_BOT_TOKEN:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": f"🚨 **TASK COMPLETED, BOSS!**\n\nTask: `{task_description}`\nStatus: ✅ 100% Done & Verified.\n\nअगली बार जब आप बात करेंगे, मैं इसका पूरा ब्यौरा प्रस्तुत कर दूँगी।"
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                await client.post(url, json=payload, timeout=10.0)
-            except Exception as err:
-                print(f"Telegram alert delivery error: {err}")
+        message_text = f"🚨 **TASK COMPLETED, BOSS!**\n\n🎯 **Task:** `{task_description}`\n\n📋 **Report:**\n\n{generated_report}"
+        
+        # Telegram 4096 character chunking safety
+        chunks = [message_text[i:i+3800] for i in range(0, len(message_text), 3800)] if len(message_text) > 4000 else [message_text]
 
-# --- Tool Declarations ---
+        async with httpx.AsyncClient() as client:
+            for ch in chunks:
+                try:
+                    await client.post(url, json={"chat_id": chat_id, "text": ch}, timeout=15.0)
+                except Exception as err:
+                    print(f"Telegram report delivery error: {err}")
+
+# --- Tool Declarations (Function Calling) ---
 TOOL_DECLARATIONS = [
     {
         "name": "start_background_task",
@@ -186,11 +230,10 @@ def build_system_prompt() -> str:
         "You are Maya, an ultra-intelligent, sovereign female AI Meta-Agent for 'Boss'. "
         "Converse in natural, sweet, crisp Hindi/Hinglish using strictly female grammatical inflections ('करती हूँ', 'बताती हूँ'). "
         "PRIMARY PROTOCOLS: "
-        "1. This is an active voice/chat link. Give short, direct, 1-2 sentence replies. "
-        "2. If Boss assigns a heavy job (e.g., website creation, coding, research), invoke 'start_background_task' immediately and tell Boss: 'Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही आपको टेलीग्राम पर अलर्ट भेज दूँगी।' "
-        "3. When asked for an image, invoke 'generate_image'. "
-        "4. When asked to close an image, invoke 'close_image'. "
-        "5. When Boss asks about system health, lag, or slowness, invoke 'system_diagnostics' and speak the diagnosis clearly. "
+        "1. Real-time active voice/chat link: Give sharp, intelligent, natural answers without robotic hesitation. "
+        "2. When asked for an image, invoke 'generate_image'. "
+        "3. When asked to close an image, invoke 'close_image'. "
+        "4. When Boss asks about system health, invoke 'system_diagnostics'. "
         f"\n[PERSISTENT MEMORY]\n{mem}\n"
         f"\n[BACKGROUND STATUS]\n{last_task}\n"
     )
@@ -231,7 +274,14 @@ async def run_telegram_gateway():
     async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         save_boss_chat_id(str(chat_id))
-        text = update.message.text
+        text = update.message.text.strip()
+
+        # Check if query requests background task/research
+        lower_text = text.lower()
+        if any(w in lower_text for w in ["background", "बैकग्राउंड", "रिसर्च करो", "research karo", "banao", "create website", "project"]):
+            asyncio.create_task(execute_background_task(text))
+            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरी रिसर्च और रिपोर्ट तैयार होते ही मैं इसी चैट में आपको अलर्ट भेजती हूँ।")
+            return
 
         reply = ""
 
@@ -248,7 +298,7 @@ async def run_telegram_gateway():
                 if response and hasattr(response, "text") and response.text:
                     reply = response.text
             except Exception as e:
-                print(f"[FALLBACK TRIGGER] Gemini unavailable: {e}, falling back to Groq...")
+                print(f"[FALLBACK TRIGGER] Gemini error: {e}, falling back to Groq...")
 
         # Engine 2: Verified Production Groq (openai/gpt-oss-20b)
         if not reply and groq_client:
@@ -279,7 +329,7 @@ async def run_telegram_gateway():
 
     await application.initialize()
     await application.start()
-    # Conflicts रोकने के लिए drop_pending_updates चालू रखा गया है
+    # Conflict एरर से बचने के लिए drop_pending_updates चालू रखा गया है
     await application.updater.start_polling(drop_pending_updates=True)
 
 # --- WebSocket Live Call Link (Web Dashboard) ---
