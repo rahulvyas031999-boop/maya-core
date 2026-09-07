@@ -17,10 +17,8 @@ from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Real ReAct Autonomous Engine
+# ReAct & Workspace Modules
 from agent_loop import run_react_agent
-
-# Persistent SQLite Queue
 from task_queue import (
     create_task,
     append_modification,
@@ -30,8 +28,6 @@ from task_queue import (
     get_active_tasks_summary,
     get_unprocessed_tasks
 )
-
-# Workspace Artifact Manager
 from workspace_manager import list_artifacts, get_workspace_path, WORKSPACE_DIR
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
@@ -46,9 +42,8 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 STATE_FILE = "maya_state.json"
-ACTIVE_WEBSOCKETS: List[WebSocket] = []
+CURRENT_ACTIVE_WS: WebSocket = None  # Single Active WebSocket Lock
 
-# Whisper Hallucination Filter List
 GHOST_PHRASES = [
     "subtitles", "thank you", "watching", "amara.org", "subscribe", 
     "you", "bye", "thanks", "dhanyawad", "foreign", "[music]"
@@ -111,10 +106,11 @@ async def dispatch_to_telegram(text: str = None, photo_url: str = None, document
         except Exception as e:
             print(f"[TELEGRAM DISPATCH ERROR]: {e}")
 
+# --- Decoupled Heavy Worker (Runs completely independent of live voice call) ---
 async def run_autonomous_worker(task_id: str, initial_prompt: str):
-    print(f"[PERSISTENT WORKER] Task {task_id} running: {initial_prompt}")
+    print(f"[HEAVY WORKER] Task {task_id} launched: {initial_prompt}")
     update_task_status(task_id, "processing")
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
     task_info = get_task(task_id)
     mods = task_info.get("modifications", []) if task_info else []
@@ -122,12 +118,15 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
     if mods:
         full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
 
+    # ReAct agent execution
     final_delivery = await run_react_agent(full_spec)
     update_task_status(task_id, "completed", final_delivery)
 
+    # 1. Telegram Dispatch
     report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
     await dispatch_to_telegram(text=report_msg)
 
+    # 2. Telegram File Dispatch
     all_files = list_artifacts()
     if all_files:
         latest_file = all_files[-1]
@@ -137,11 +136,13 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
             caption=f"📁 Boss, यहाँ आपकी जनरेटेड फ़ाइल है: {latest_file['filename']}"
         )
 
-    for ws in ACTIVE_WEBSOCKETS:
+    # 3. Live WebSocket Alert (Non-blocking)
+    global CURRENT_ACTIVE_WS
+    if CURRENT_ACTIVE_WS:
         try:
-            await ws.send_json({
+            await CURRENT_ACTIVE_WS.send_json({
                 "type": "reply_text",
-                "text": f"Boss, टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। फ़ाइल और रिपोर्ट टेलीग्राम पर भेज दी है।"
+                "text": f"Boss, टास्क पूरा हो गया है। फ़ाइल और रिपोर्ट टेलीग्राम पर भेज दी है।"
             })
         except Exception:
             pass
@@ -156,9 +157,17 @@ def extract_clean_json(text: str) -> Dict[str, Any]:
         return {}
 
 async def master_router(user_input: str) -> Dict[str, Any]:
+    words = user_input.strip().split()
+    if len(words) <= 2 and not any(w in user_input.lower() for w in ["photo", "image", "tasveer"]):
+        return {
+            "intent": "chat",
+            "voice_response": "जी Boss, बताइए मैं क्या करूँ?",
+            "task_payload": user_input,
+            "screen_content": ""
+        }
+
     active_summary = get_active_tasks_summary()
 
-    # STRICT FEMALE PERSONA & GRAMMAR
     router_prompt = (
         f"You are Maya, an ultra-smart, loyal FEMALE AI Executive for Boss.\n"
         f"GENDER RULE: Strictly speak as a female in Hindi/Hinglish (ALWAYS use 'करती हूँ', 'बताती हूँ', 'देखती हूँ'. NEVER use male 'करता हूँ').\n"
@@ -193,17 +202,6 @@ async def master_router(user_input: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    if not decision and gemini_client:
-        try:
-            res = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=router_prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            decision = extract_clean_json(res.text)
-        except Exception:
-            pass
-
     return decision or {
         "intent": "chat",
         "voice_response": "जी Boss, बताइए आगे क्या करना है?",
@@ -223,57 +221,60 @@ async def generate_neural_speech(text: str) -> str:
     except Exception:
         return ""
 
-# --- Telegram Bot Handler ---
+# --- Safe Telegram Bot Gateway ---
 async def run_telegram_gateway():
     if not TELEGRAM_BOT_TOKEN:
         return
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    try:
+        application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        save_boss_chat_id(str(chat_id))
-        await update.message.reply_text("नमस्ते Boss! Maya Sovereign Core सक्रिय है।")
+        async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            chat_id = update.effective_chat.id
+            save_boss_chat_id(str(chat_id))
+            await update.message.reply_text("नमस्ते Boss! Maya Sovereign Core सक्रिय है।")
 
-    async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        save_boss_chat_id(str(chat_id))
-        text = update.message.text.strip()
+        async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            chat_id = update.effective_chat.id
+            save_boss_chat_id(str(chat_id))
+            text = update.message.text.strip()
 
-        decision = await master_router(text)
-        intent = decision.get("intent", "chat")
-        payload = decision.get("task_payload") or text
+            decision = await master_router(text)
+            intent = decision.get("intent", "chat")
+            payload = decision.get("task_payload") or text
 
-        if intent == "generate_image":
-            img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
-            try:
-                await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, इमेज तैयार है:\n🎯 {payload}")
-            except Exception:
-                await update.message.reply_text(f"Boss, लिंक: {img_url}")
+            if intent == "generate_image":
+                img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                try:
+                    await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, इमेज तैयार है:\n🎯 {payload}")
+                except Exception:
+                    await update.message.reply_text(f"Boss, लिंक: {img_url}")
 
-        elif intent == "new_heavy_task":
-            tid = f"task_{int(time.time())}"
-            create_task(tid, payload)
-            asyncio.create_task(run_autonomous_worker(tid, payload))
-            await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही फ़ाइल और रिपोर्ट भेज दूँगी।")
+            elif intent == "new_heavy_task":
+                tid = f"task_{int(time.time())}"
+                create_task(tid, payload)
+                asyncio.create_task(run_autonomous_worker(tid, payload))
+                await update.message.reply_text("Boss, मैंने काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल भेज दूँगी।")
 
-        elif intent == "modify_task":
-            tid = decision.get("task_id") or get_latest_active_task_id()
-            if tid and append_modification(tid, payload):
-                await update.message.reply_text("Boss, रनिंग टास्क में नया बदलाव जोड़ दिया गया है।")
+            elif intent == "modify_task":
+                tid = decision.get("task_id") or get_latest_active_task_id()
+                if tid and append_modification(tid, payload):
+                    await update.message.reply_text("Boss, रनिंग टास्क में बदलाव जोड़ दिया गया है।")
+                else:
+                    new_tid = f"task_{int(time.time())}"
+                    create_task(new_tid, payload)
+                    asyncio.create_task(run_autonomous_worker(new_tid, payload))
+                    await update.message.reply_text("Boss, नए टास्क के रूप में शुरू कर रही हूँ।")
+
             else:
-                new_tid = f"task_{int(time.time())}"
-                create_task(new_tid, payload)
-                asyncio.create_task(run_autonomous_worker(new_tid, payload))
-                await update.message.reply_text("Boss, नए टास्क के रूप में शुरू कर रही हूँ।")
+                await update.message.reply_text(decision.get("voice_response", "जी Boss!"))
 
-        else:
-            await update.message.reply_text(decision.get("voice_response", "जी Boss!"))
-
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
+        application.add_handler(CommandHandler("start", start_cmd))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"[TELEGRAM INIT WARNING]: {e}")
 
 @app.on_event("startup")
 async def startup():
@@ -314,11 +315,18 @@ async def download_or_view_artifact(file_path: str):
     except Exception as e:
         return {"error": str(e)}
 
-# --- WebSocket Live Voice Link (Noise & Ghost Shielded) ---
+# --- WebSocket Live Voice Link (Decoupled & Single Session Lock) ---
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
+    global CURRENT_ACTIVE_WS
     await ws.accept()
-    ACTIVE_WEBSOCKETS.append(ws)
+
+    if CURRENT_ACTIVE_WS is not None:
+        try:
+            await CURRENT_ACTIVE_WS.close()
+        except Exception:
+            pass
+    CURRENT_ACTIVE_WS = ws
 
     welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
     welcome_audio = await generate_neural_speech(welcome_text)
@@ -332,34 +340,29 @@ async def websocket_live_call(ws: WebSocket):
             msg = json.loads(data)
             user_query = ""
 
-            if msg.get("type") == "audio_blob" and groq_client:
+            # 1. Instant Text from Native Browser ASR (Fast & Zero Audio Upload)
+            if msg.get("type") == "query":
+                user_query = msg.get("text", "").strip()
+
+            # 2. Audio Blob Fallback
+            elif msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
-                    # 6KB Noise Gate: खाली/छोटे ऑडियो को रिजेक्ट करो
-                    if len(wav_bytes) < 6000:
-                        continue
-
-                    audio_file = io.BytesIO(wav_bytes)
-                    audio_file.name = "audio.wav"
-                    loop = asyncio.get_running_loop()
-                    transcription = await loop.run_in_executor(
-                        None,
-                        lambda: groq_client.audio.transcriptions.create(
-                            file=audio_file, model="whisper-large-v3", language="hi"
+                    if len(wav_bytes) >= 6000:
+                        audio_file = io.BytesIO(wav_bytes)
+                        audio_file.name = "audio.wav"
+                        loop = asyncio.get_running_loop()
+                        transcription = await loop.run_in_executor(
+                            None,
+                            lambda: groq_client.audio.transcriptions.create(
+                                file=audio_file, model="whisper-large-v3", language="hi"
+                            )
                         )
-                    )
-                    candidate_text = transcription.text.strip()
-
-                    # Ghost Filtering
-                    clean_check = candidate_text.lower()
-                    if not any(g in clean_check for g in GHOST_PHRASES) and len(clean_check) > 1:
-                        user_query = candidate_text
-
+                        cand = transcription.text.strip()
+                        if not any(g in cand.lower() for g in GHOST_PHRASES) and len(cand) > 2:
+                            user_query = cand
                 except Exception as e:
                     print(f"[WHISPER ERROR]: {e}")
-
-            elif msg.get("type") == "query":
-                user_query = msg.get("text", "").strip()
 
             if user_query:
                 await ws.send_json({"type": "transcript", "text": user_query})
@@ -370,6 +373,7 @@ async def websocket_live_call(ws: WebSocket):
                 payload = decision.get("task_payload") or user_query
                 screen_doc = decision.get("screen_content", "")
 
+                # Decoupled Heavy Task Trigger (Voice loop par koi load nahi padega)
                 if intent == "new_heavy_task":
                     tid = f"task_{int(time.time())}"
                     create_task(tid, payload)
@@ -378,7 +382,7 @@ async def websocket_live_call(ws: WebSocket):
                 elif intent == "modify_task":
                     tid = decision.get("task_id") or get_latest_active_task_id()
                     if tid and append_modification(tid, payload):
-                        voice_msg = "Boss, बैकग्राउंड टास्क में यह नया बदलाव जोड़ दिया है।"
+                        voice_msg = "Boss, बैकग्राउंड टास्क में नया बदलाव जोड़ दिया है।"
                     else:
                         new_tid = f"task_{int(time.time())}"
                         create_task(new_tid, payload)
@@ -394,14 +398,15 @@ async def websocket_live_call(ws: WebSocket):
                     await ws.send_json({"type": "document", "content": screen_doc})
                     asyncio.create_task(dispatch_to_telegram(text=f"📋 **LIVE SCRIPT / PROJECTION**\n\n{screen_doc}"))
 
+                # Send Crisp Voice Output
                 await ws.send_json({"type": "reply_text", "text": voice_msg})
                 speech_b64 = await generate_neural_speech(voice_msg)
                 if speech_b64:
                     await ws.send_json({"type": "audio", "data": speech_b64})
 
     except WebSocketDisconnect:
-        if ws in ACTIVE_WEBSOCKETS:
-            ACTIVE_WEBSOCKETS.remove(ws)
+        if CURRENT_ACTIVE_WS == ws:
+            CURRENT_ACTIVE_WS = None
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
