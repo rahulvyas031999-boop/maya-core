@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MAYA // NEURAL AGENT</title>
+    <title>MAYA // NEURAL OS</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -24,7 +24,7 @@
             flex-direction: column;
             align-items: center;
             justify-content: space-between;
-            padding: 20px 16px;
+            padding: 16px;
             overflow: hidden;
             position: relative;
         }
@@ -35,24 +35,24 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px 18px;
+            padding: 10px 16px;
             background: var(--glass);
             border: 1px solid var(--border);
-            border-radius: 14px;
+            border-radius: 12px;
             backdrop-filter: blur(12px);
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
             font-weight: 900;
-            font-size: 1.1rem;
+            font-size: 1.05rem;
             letter-spacing: 2px;
             color: #fff;
             text-shadow: 0 0 10px var(--cyan);
         }
         .hud-badge {
             font-family: 'Orbitron', sans-serif;
-            font-size: 0.72rem;
-            padding: 4px 10px;
+            font-size: 0.7rem;
+            padding: 4px 8px;
             border-radius: 6px;
             background: rgba(0, 243, 255, 0.1);
             border: 1px solid var(--cyan);
@@ -72,31 +72,31 @@
         #coreContainer {
             z-index: 10;
             position: relative;
-            width: 250px;
-            height: 250px;
+            width: 240px;
+            height: 240px;
             display: flex;
             align-items: center;
             justify-content: center;
         }
         .ring { position: absolute; border-radius: 50%; pointer-events: none; }
         .ring-1 {
-            width: 240px; height: 240px;
+            width: 230px; height: 230px;
             border-top: 2px solid var(--cyan);
             border-bottom: 2px solid var(--purple);
             animation: spinCW 12s linear infinite;
         }
         .ring-2 {
-            width: 195px; height: 195px;
+            width: 190px; height: 190px;
             border-left: 2px solid var(--cyan);
             animation: spinCCW 8s linear infinite;
         }
         .quantum-orb {
-            width: 120px;
-            height: 120px;
+            width: 110px;
+            height: 110px;
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%);
             box-shadow: 0 0 45px var(--cyan), inset 0 0 20px #fff;
-            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
         }
         .quantum-orb.speaking {
             animation: voicePulse 0.9s infinite alternate ease-in-out;
@@ -120,29 +120,25 @@
             background: var(--glass);
             border: 1px solid var(--border);
             border-radius: 14px;
-            padding: 12px;
+            padding: 10px;
             display: none;
             flex-direction: column;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             backdrop-filter: blur(14px);
         }
         #actionCard img {
             width: 100%;
             border-radius: 10px;
-            max-height: 220px;
+            max-height: 200px;
             object-fit: cover;
             border: 1px solid rgba(0, 243, 255, 0.3);
         }
-        .action-btns {
-            display: flex;
-            gap: 8px;
-            width: 100%;
-        }
+        .action-btns { display: flex; gap: 8px; width: 100%; }
         .holo-btn {
             flex: 1;
             font-family: 'Orbitron', sans-serif;
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             background: rgba(0, 243, 255, 0.15);
             color: var(--cyan);
             padding: 8px;
@@ -163,28 +159,32 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             width: 100%;
             max-width: 420px;
         }
         #statusLabel {
-            font-size: 0.95rem;
-            letter-spacing: 1px;
+            font-size: 0.92rem;
+            letter-spacing: 0.5px;
             color: #8fa0bc;
             font-weight: 600;
             text-align: center;
             min-height: 24px;
+            max-width: 360px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         #callToggle {
-            width: 78px;
-            height: 78px;
+            width: 74px;
+            height: 74px;
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
             border: 2px solid #00ffcc;
             color: #030611;
-            font-size: 2rem;
+            font-size: 1.8rem;
             cursor: pointer;
-            box-shadow: 0 0 35px rgba(0, 255, 204, 0.5);
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.5);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -199,10 +199,10 @@
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.8rem;">OS v2.5</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">HYBRID v2.5</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
-            <span>LIVE SPEECH CALL</span>
+            <span id="pingHud">LINK OK // DESPINA</span>
         </div>
     </header>
 
@@ -221,7 +221,7 @@
     </div>
 
     <div id="controls">
-        <div id="statusLabel">कॉल शुरू करने के लिए बटन दबाएं</div>
+        <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
         <button id="callToggle" onclick="toggleCall()">📞</button>
     </div>
 
@@ -237,6 +237,7 @@
         const actionCard = document.getElementById('actionCard');
         const cardImage = document.getElementById('cardImage');
         const downloadBtn = document.getElementById('downloadBtn');
+        const pingHud = document.getElementById('pingHud');
 
         async function toggleCall() {
             if (!isCalling) {
@@ -259,7 +260,7 @@
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
                     statusLabel.innerText = "कॉल लाइव है // बोलिए";
-                    initSpeechRecognition();
+                    initSpeechEngine();
                 };
 
                 ws.onmessage = async (e) => {
@@ -272,6 +273,8 @@
                     } else if (msg.type === 'close_image') {
                         closeActionCard();
                     } else if (msg.type === 'ping') {
+                        const pingMs = Math.round((Date.now() - (msg.timestamp * 1000)));
+                        pingHud.innerText = `PING: ${Math.max(10, pingMs)}ms`;
                         ws.send(JSON.stringify({ type: 'pong' }));
                     }
                 };
@@ -298,14 +301,14 @@
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
         }
 
-        function initSpeechRecognition() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                alert("कृपया Chrome ब्राउज़र का उपयोग करें। Native Speech Engine उपलब्ध नहीं है।");
+        function initSpeechEngine() {
+            const SpeechEngine = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechEngine) {
+                alert("कृपया Chrome का उपयोग करें। Speech Recognition सपोर्ट आवश्यक है।");
                 return;
             }
 
-            recognition = new SpeechRecognition();
+            recognition = new SpeechEngine();
             recognition.continuous = true;
             recognition.interimResults = false;
             recognition.lang = 'hi-IN';
@@ -315,25 +318,24 @@
             };
 
             recognition.onresult = (event) => {
-                if (isMayaSpeaking) return; // Ignore input while Maya speaks
+                if (isMayaSpeaking) return;
                 const lastResult = event.results[event.results.length - 1];
                 if (lastResult.isFinal) {
-                    const text = lastResult[0].transcript.trim();
-                    if (text && ws && ws.readyState === WebSocket.OPEN) {
+                    const query = lastResult[0].transcript.trim();
+                    if (query && ws && ws.readyState === WebSocket.OPEN) {
                         orb.classList.add('user-active');
-                        statusLabel.innerText = `Boss: "${text}"`;
-                        ws.send(JSON.stringify({ type: 'text_query', text: text }));
-                        setTimeout(() => orb.classList.remove('user-active'), 500);
+                        statusLabel.innerText = `Boss: "${query}"`;
+                        ws.send(JSON.stringify({ type: 'query', text: query }));
+                        setTimeout(() => orb.classList.remove('user-active'), 400);
                     }
                 }
             };
 
             recognition.onerror = (e) => {
-                console.log("Speech Rec Error: ", e);
+                console.log("Speech Engine Error:", e);
             };
 
             recognition.onend = () => {
-                // Auto restart recognition loop seamlessly
                 if (isCalling) {
                     try { recognition.start(); } catch(e){}
                 }
