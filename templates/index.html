@@ -199,7 +199,7 @@
 </head>
 <body>
     <header>
-        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">HYBRID v2.5</span></div>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.75rem;">SOVEREIGN v2.6</span></div>
         <div class="hud-badge">
             <div class="hud-dot"></div>
             <span id="pingHud">LINK OK // DESPINA</span>
@@ -228,7 +228,9 @@
     <script>
         let ws = null;
         let audioCtx = null;
-        let recognition = null;
+        let micStream = null;
+        let micSource = null;
+        let processor = null;
         let isCalling = false;
         let isMayaSpeaking = false;
 
@@ -249,18 +251,19 @@
 
         async function startLiveCall() {
             try {
+                // Dual Sample-rate support: 16kHz for input mic, 24kHz for playback
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
 
                 const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${proto}//${window.location.host}/ws/live`);
 
-                ws.onopen = () => {
+                ws.onopen = async () => {
                     isCalling = true;
                     document.getElementById('callToggle').classList.add('active');
                     document.getElementById('callToggle').innerText = '🛑';
-                    statusLabel.innerText = "कॉल लाइव है // बोलिए";
-                    initSpeechEngine();
+                    statusLabel.innerText = "लाइव कॉल कनेक्टेड // बोलिए Boss";
+                    await setupContinuousMicStream();
                 };
 
                 ws.onmessage = async (e) => {
@@ -268,6 +271,8 @@
                     if (msg.type === 'audio') {
                         if (audioCtx.state === 'suspended') await audioCtx.resume();
                         playIncomingPcm(msg.data);
+                    } else if (msg.type === 'transcript') {
+                        statusLabel.innerText = `Boss: "${msg.text}"`;
                     } else if (msg.type === 'image') {
                         showActionImage(msg.url);
                     } else if (msg.type === 'close_image') {
@@ -283,7 +288,65 @@
                 ws.onerror = () => stopLiveCall();
 
             } catch (err) {
-                alert("Audio Init Error: " + err);
+                alert("Live Link Init Error: " + err);
+                stopLiveCall();
+            }
+        }
+
+        async function setupContinuousMicStream() {
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                const micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                micSource = micAudioCtx.createMediaStreamSource(micStream);
+                // Zero-beep Audio Processor (Native Buffer capture)
+                processor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+
+                processor.onaudioprocess = (e) => {
+                    if (!isCalling || isMayaSpeaking || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    let pcm16 = new Int16Array(inputData.length);
+                    let sumSquares = 0.0;
+
+                    for (let i = 0; i < inputData.length; i++) {
+                        let sample = Math.max(-1, Math.min(1, inputData[i]));
+                        pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                        sumSquares += sample * sample;
+                    }
+
+                    // Client-Side VAD Threshold (Bolne par hi send karega, mic on/off beep 0%)
+                    const rms = Math.sqrt(sumSquares / inputData.length);
+                    if (rms > 0.015) {
+                        orb.classList.add('user-active');
+                        let binary = '';
+                        let bytes = new Uint8Array(pcm16.buffer);
+                        for (let i = 0; i < bytes.byteLength; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        ws.send(JSON.stringify({
+                            type: 'audio_pcm',
+                            data: btoa(binary)
+                        }));
+                    } else {
+                        orb.classList.remove('user-active');
+                    }
+                };
+
+                micSource.connect(processor);
+                processor.connect(micAudioCtx.destination);
+
+            } catch (err) {
+                console.error("Mic Access Error:", err);
+                statusLabel.innerText = "माइक्रोफ़ोन एक्सेस अस्वीकृत";
             }
         }
 
@@ -294,54 +357,19 @@
             statusLabel.innerText = "कॉल समाप्त // पुनः बात करने के लिए टैप करें";
             orb.className = 'quantum-orb';
 
-            if (recognition) {
-                recognition.abort();
-                recognition = null;
+            if (processor && micSource) {
+                try {
+                    micSource.disconnect();
+                    processor.disconnect();
+                } catch(e){}
             }
-            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-        }
-
-        function initSpeechEngine() {
-            const SpeechEngine = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechEngine) {
-                alert("कृपया Chrome का उपयोग करें। Speech Recognition सपोर्ट आवश्यक है।");
-                return;
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
             }
-
-            recognition = new SpeechEngine();
-            recognition.continuous = true;
-            recognition.interimResults = false;
-            recognition.lang = 'hi-IN';
-
-            recognition.onstart = () => {
-                if (!isMayaSpeaking) orb.classList.remove('user-active');
-            };
-
-            recognition.onresult = (event) => {
-                if (isMayaSpeaking) return;
-                const lastResult = event.results[event.results.length - 1];
-                if (lastResult.isFinal) {
-                    const query = lastResult[0].transcript.trim();
-                    if (query && ws && ws.readyState === WebSocket.OPEN) {
-                        orb.classList.add('user-active');
-                        statusLabel.innerText = `Boss: "${query}"`;
-                        ws.send(JSON.stringify({ type: 'query', text: query }));
-                        setTimeout(() => orb.classList.remove('user-active'), 400);
-                    }
-                }
-            };
-
-            recognition.onerror = (e) => {
-                console.log("Speech Engine Error:", e);
-            };
-
-            recognition.onend = () => {
-                if (isCalling) {
-                    try { recognition.start(); } catch(e){}
-                }
-            };
-
-            try { recognition.start(); } catch(e){}
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
         }
 
         let audioQueue = [];
@@ -394,4 +422,4 @@
         }
     </script>
 </body>
-    </html>
+</html>
