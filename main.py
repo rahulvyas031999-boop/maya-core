@@ -17,8 +17,19 @@ from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Real ReAct Autonomous Engine Import
+# Real ReAct Autonomous Engine
 from agent_loop import run_react_agent
+
+# Step 4: Persistent SQLite Job Queue Engine
+from task_queue import (
+    create_task,
+    append_modification,
+    get_latest_active_task_id,
+    get_task,
+    update_task_status,
+    get_active_tasks_summary,
+    get_unprocessed_tasks
+)
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
@@ -32,8 +43,6 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
 
 STATE_FILE = "maya_state.json"
-TASKS_FILE = "maya_tasks.json"
-
 ACTIVE_WEBSOCKETS: List[WebSocket] = []
 
 # --- Persistent State Helpers ---
@@ -85,43 +94,27 @@ async def dispatch_to_telegram(text: str = None, photo_url: str = None, caption:
         except Exception as e:
             print(f"[TELEGRAM DISPATCH ERROR]: {e}")
 
-# --- Autonomous Worker Engine (True ReAct Connected) ---
+# --- Autonomous Persistent Worker (SQLite + ReAct) ---
 async def run_autonomous_worker(task_id: str, initial_prompt: str):
-    print(f"[AUTONOMOUS WORKER] Task {task_id} launched with ReAct Engine: {initial_prompt}")
-    tasks_data = load_json(TASKS_FILE, {"active": {}, "completed": []})
-    tasks_data["active"][task_id] = {
-        "prompt": initial_prompt,
-        "modifications": [],
-        "created_at": time.time(),
-        "status": "processing"
-    }
-    save_json(TASKS_FILE, tasks_data)
+    print(f"[PERSISTENT WORKER] Task {task_id} running from SQLite queue: {initial_prompt}")
+    update_task_status(task_id, "processing")
 
-    # Allow a short window for initial user speech additions
+    # शुरूआती वॉइस बातचीत के लिए 4 सेकंड का बफर
     await asyncio.sleep(4)
 
-    current_tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
-    task_info = current_tasks.get("active", {}).get(task_id, {})
-    mods = task_info.get("modifications", [])
-    
+    # SQLite से ताज़ा डेटा (सहित लाइव कॉल मॉडिफिकेशन्स) पढ़ना
+    task_info = get_task(task_id)
+    mods = task_info.get("modifications", []) if task_info else []
+
     full_spec = initial_prompt
     if mods:
         full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
 
-    # Execute via real ReAct Agent Loop (Web Search, File I/O)
+    # ReAct एजेंट लूप से एक्जीक्यूट करें (Web Search, File I/O)
     final_delivery = await run_react_agent(full_spec)
 
-    # Save Completion State
-    current_tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
-    if task_id in current_tasks.get("active", {}):
-        del current_tasks["active"][task_id]
-    current_tasks.setdefault("completed", []).append({
-        "task_id": task_id,
-        "prompt": initial_prompt,
-        "result_preview": final_delivery[:150],
-        "time": time.time()
-    })
-    save_json(TASKS_FILE, current_tasks)
+    # SQLite में टास्क को 'completed' मार्क करें
+    update_task_status(task_id, "completed", final_delivery)
 
     # 1. Telegram Dispatch
     report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
@@ -132,12 +125,12 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
         try:
             await ws.send_json({
                 "type": "reply_text",
-                "text": f"Boss, बैकग्राउंड टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। रिपोर्ट टेलीग्राम पर भेज दी है।"
+                "text": f"Boss, टास्क '{initial_prompt[:30]}...' पूरा हो चुका है। रिपोर्ट टेलीग्राम पर भेज दी है।"
             })
         except Exception:
             pass
 
-# --- Master Router ---
+# --- Master Brain: Real-Time Intent & Context Classifier ---
 def extract_clean_json(text: str) -> Dict[str, Any]:
     try:
         match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -148,9 +141,7 @@ def extract_clean_json(text: str) -> Dict[str, Any]:
         return {}
 
 async def master_router(user_input: str) -> Dict[str, Any]:
-    tasks_data = load_json(TASKS_FILE, {"active": {}, "completed": []})
-    active_jobs = tasks_data.get("active", {})
-    active_summary = [{"id": k, "task": v.get("prompt")} for k, v in active_jobs.items()]
+    active_summary = get_active_tasks_summary()
 
     router_prompt = (
         f"You are the executive Master Brain of Maya Sovereign OS.\n"
@@ -182,6 +173,17 @@ async def master_router(user_input: str) -> Dict[str, Any]:
                 )
             )
             decision = extract_clean_json(res.choices[0].message.content)
+        except Exception:
+            pass
+
+    if not decision and gemini_client:
+        try:
+            res = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=router_prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            decision = extract_clean_json(res.text)
         except Exception:
             pass
 
@@ -233,21 +235,21 @@ async def run_telegram_gateway():
 
         elif intent == "new_heavy_task":
             tid = f"task_{int(time.time())}"
+            create_task(tid, payload)
             asyncio.create_task(run_autonomous_worker(tid, payload))
             await update.message.reply_text("Boss, रीएक्ट वर्कर ने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल और रिपोर्ट भेज दूँगी।")
 
         elif intent == "modify_task":
-            tid = decision.get("task_id")
-            tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
-            active = tasks.get("active", {})
-            target_id = tid if tid in active else (list(active.keys())[-1] if active else None)
-            if target_id:
-                active[target_id].setdefault("modifications", []).append(payload)
-                save_json(TASKS_FILE, tasks)
-                await update.message.reply_text(f"Boss, रनिंग टास्क `{active[target_id]['prompt'][:30]}...` में नया बदलाव जोड़ दिया गया है।")
+            tid = decision.get("task_id") or get_latest_active_task_id()
+            if tid and append_modification(tid, payload):
+                task_data = get_task(tid)
+                task_name = task_data['prompt'][:30] if task_data else tid
+                await update.message.reply_text(f"Boss, रनिंग टास्क `{task_name}...` में नया बदलाव जोड़ दिया गया है।")
             else:
+                new_tid = f"task_{int(time.time())}"
+                create_task(new_tid, payload)
+                asyncio.create_task(run_autonomous_worker(new_tid, payload))
                 await update.message.reply_text("Boss, कोई एक्टिव टास्क नहीं मिला, नए टास्क के रूप में शुरू कर रही हूँ।")
-                asyncio.create_task(run_autonomous_worker(f"task_{int(time.time())}", payload))
 
         else:
             await update.message.reply_text(decision.get("voice_response", "जी Boss!"))
@@ -258,7 +260,7 @@ async def run_telegram_gateway():
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
 
-# --- Render Never-Sleep Watchdog ---
+# --- Render Never-Sleep Watchdog & Crash Recovery ---
 @app.on_event("startup")
 async def startup():
     async def self_ping():
@@ -273,13 +275,20 @@ async def startup():
             await asyncio.sleep(300)
 
     asyncio.create_task(self_ping())
+    
     if TELEGRAM_BOT_TOKEN:
         asyncio.create_task(run_telegram_gateway())
 
+    # Crash Recovery: सर्वर रीस्टार्ट होने पर पेंडिंग टास्क्स को SQLite से दोबारा उठाना
+    unprocessed = get_unprocessed_tasks()
+    for t in unprocessed:
+        print(f"[RECOVERY] Resuming interrupted task: {t['task_id']}")
+        asyncio.create_task(run_autonomous_worker(t['task_id'], t['prompt']))
+
 @app.get("/health")
 async def health():
-    tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
-    return {"status": "Sovereign Master Active", "active_tasks_count": len(tasks.get("active", {}))}
+    active_count = len(get_active_tasks_summary())
+    return {"status": "Sovereign Master Active", "active_tasks_count": active_count}
 
 # --- WebSocket Live Voice ---
 @app.websocket("/ws/live")
@@ -329,17 +338,18 @@ async def websocket_live_call(ws: WebSocket):
 
                 if intent == "new_heavy_task":
                     tid = f"task_{int(time.time())}"
+                    create_task(tid, payload)
                     asyncio.create_task(run_autonomous_worker(tid, payload))
 
                 elif intent == "modify_task":
-                    tid = decision.get("task_id")
-                    tasks = load_json(TASKS_FILE, {"active": {}, "completed": []})
-                    active = tasks.get("active", {})
-                    target_id = tid if tid in active else (list(active.keys())[-1] if active else None)
-                    if target_id:
-                        active[target_id].setdefault("modifications", []).append(payload)
-                        save_json(TASKS_FILE, tasks)
+                    tid = decision.get("task_id") or get_latest_active_task_id()
+                    if tid and append_modification(tid, payload):
                         voice_msg = "Boss, बैकग्राउंड टास्क में यह नया बदलाव जोड़ दिया है।"
+                    else:
+                        new_tid = f"task_{int(time.time())}"
+                        create_task(new_tid, payload)
+                        asyncio.create_task(run_autonomous_worker(new_tid, payload))
+                        voice_msg = "Boss, मैंने इसे नए बैकग्राउंड टास्क के रूप में शुरू कर दिया है।"
 
                 elif intent == "generate_image":
                     img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
