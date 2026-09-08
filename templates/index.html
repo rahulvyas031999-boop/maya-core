@@ -149,6 +149,31 @@
             cursor: pointer;
         }
         .close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
+        #telegramFallback {
+            width: 100%;
+            max-width: 480px;
+            background: var(--glass);
+            border: 1px solid rgba(255, 200, 0, 0.4);
+            border-radius: 12px;
+            padding: 10px 14px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        #telegramFallback p {
+            font-size: 0.8rem;
+            color: #ffd166;
+            text-align: center;
+            font-weight: 600;
+        }
+        .fallback-btns { display: flex; gap: 8px; width: 100%; }
+        .telegram-btn {
+            background: rgba(255, 209, 102, 0.15);
+            color: #ffd166;
+            border-color: #ffd166;
+        }
         #controls {
             width: 100%;
             max-width: 480px;
@@ -224,6 +249,14 @@
         </div>
     </div>
 
+    <div id="telegramFallback">
+        <p>⚠️ नेटवर्क कमज़ोर लग रहा है। Telegram पर low-bandwidth mode try करें?</p>
+        <div class="fallback-btns">
+            <a id="telegramLinkBtn" href="#" target="_blank" class="holo-btn telegram-btn">💬 TELEGRAM MODE</a>
+            <button onclick="dismissTelegramFallback()" class="holo-btn close-btn">❌ रहने दो</button>
+        </div>
+    </div>
+
     <div id="controls">
         <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
         <div class="btn-row">
@@ -255,15 +288,151 @@
         let reconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
 
+        // Spoken queries the user recorded while the socket was down (or
+        // whose send failed mid-flight) get held here and flushed the
+        // moment the connection comes back - so a network blip never
+        // silently eats something Boss just said.
+        let pendingAudioQueue = [];
+        const MAX_PENDING_AUDIO = 5;
+
+        // Heartbeat / RTT tracking
+        let heartbeatInterval = null;
+        let heartbeatTimeout = null;
+        let lastPingSentAt = 0;
+
+        // Sequential playback queue for streamed TTS sentence chunks
+        let audioQueue = [];
+        let isPlayingQueue = false;
+
         const orb = document.getElementById("orb");
         const statusLabel = document.getElementById("statusLabel");
         const actionCard = document.getElementById("actionCard");
         const cardImage = document.getElementById("cardImage");
         const downloadBtn = document.getElementById("downloadBtn");
         const connectionState = document.getElementById("connectionState");
+        const telegramFallback = document.getElementById("telegramFallback");
+        const telegramLinkBtn = document.getElementById("telegramLinkBtn");
+
+        // Genuine low-bandwidth escape hatch: if the live call's network
+        // stays weak/reconnecting for a while, offer Telegram text mode
+        // (already-working infra, uses a fraction of the data). Fetched
+        // once from the backend so the link always matches whichever bot
+        // token is actually configured - never hardcoded.
+        let telegramLink = null;
+        let weakNetworkTimer = null;
+        let fallbackDismissedThisSpell = false;
+        const WEAK_NETWORK_FALLBACK_DELAY = 6000;
+
+        fetch("/telegram-link")
+            .then(r => r.json())
+            .then(data => { telegramLink = data.url; })
+            .catch(() => { telegramLink = null; });
+
+        function maybeShowTelegramFallback() {
+            if (!telegramLink || fallbackDismissedThisSpell) return;
+            telegramLinkBtn.href = telegramLink;
+            telegramFallback.style.display = "flex";
+        }
+
+        function dismissTelegramFallback() {
+            fallbackDismissedThisSpell = true;
+            telegramFallback.style.display = "none";
+        }
+
+        function hideTelegramFallback() {
+            telegramFallback.style.display = "none";
+        }
+
+        const hudDot = document.querySelector(".hud-dot");
+        const CONNECTION_COLORS = {
+            "ONLINE": "#00f3ff",
+            "WEAK SIGNAL": "#ffd166",
+            "RECONNECTING": "#ff9f1c",
+            "OFFLINE": "#5a6472",
+        };
 
         function setStatus(text) { statusLabel.innerText = text; }
-        function setConnection(text) { connectionState.innerText = text; }
+
+        function setConnection(text) {
+            connectionState.innerText = text;
+
+            const color = CONNECTION_COLORS[text] || CONNECTION_COLORS.ONLINE;
+            hudDot.style.background = color;
+            hudDot.style.boxShadow = `0 0 8px ${color}`;
+
+            if (text === "WEAK SIGNAL" || text === "RECONNECTING") {
+                if (!weakNetworkTimer) {
+                    weakNetworkTimer = setTimeout(maybeShowTelegramFallback, WEAK_NETWORK_FALLBACK_DELAY);
+                }
+            } else {
+                clearTimeout(weakNetworkTimer);
+                weakNetworkTimer = null;
+                if (text === "ONLINE") {
+                    fallbackDismissedThisSpell = false;
+                    hideTelegramFallback();
+                }
+                if (text === "OFFLINE") {
+                    hideTelegramFallback();
+                }
+            }
+        }
+
+        // Sync the dot color with the initial OFFLINE label at page load.
+        setConnection("OFFLINE");
+
+        // 1s, 2s, 4s, 8s, 15s(cap) - real backoff instead of hammering a
+        // network that's still down every 1.5s.
+        function getReconnectDelay(attempt) {
+            return Math.min(1000 * Math.pow(2, attempt), 15000);
+        }
+
+        function startHeartbeat() {
+            stopHeartbeat();
+            heartbeatInterval = setInterval(() => {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                lastPingSentAt = Date.now();
+                try {
+                    ws.send(JSON.stringify({ type: "ping", ts: lastPingSentAt }));
+                } catch (_) { return; }
+                // If no pong comes back, the socket is "half-dead" (looks
+                // connected, isn't) - close it so reconnect logic takes over
+                // instead of Maya silently never responding again.
+                clearTimeout(heartbeatTimeout);
+                heartbeatTimeout = setTimeout(() => {
+                    setConnection("WEAK SIGNAL");
+                    if (ws) { try { ws.close(); } catch (_) {} }
+                }, 8000);
+            }, 15000);
+        }
+
+        function stopHeartbeat() {
+            clearInterval(heartbeatInterval);
+            clearTimeout(heartbeatTimeout);
+            heartbeatInterval = null;
+            heartbeatTimeout = null;
+        }
+
+        function trySendAudioBlob(mime, base64Data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(JSON.stringify({ type: "audio_blob", mime, data: base64Data }));
+                    return;
+                } catch (err) {
+                    console.error("Audio send failed, queueing for retry:", err);
+                }
+            }
+            // Socket isn't ready - don't drop what Boss just said, hold it
+            // and flush once the connection is back up.
+            pendingAudioQueue.push({ mime, data: base64Data });
+            if (pendingAudioQueue.length > MAX_PENDING_AUDIO) pendingAudioQueue.shift();
+        }
+
+        function flushPendingAudio() {
+            if (!pendingAudioQueue.length || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const queued = pendingAudioQueue;
+            pendingAudioQueue = [];
+            queued.forEach(item => trySendAudioBlob(item.mime, item.data));
+        }
 
         async function toggleCall() {
             if (!isCalling) await startLiveCall();
@@ -284,19 +453,37 @@
                     document.getElementById("callToggle").innerText = "🛑";
                     setStatus("लाइव कनेक्शन तैयार // बोलिए Boss...");
                     if (!mediaStream) await initHardwareAudio();
+                    startHeartbeat();
+                    flushPendingAudio();
                 };
 
                 ws.onmessage = async (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        if (msg.type === "audio") {
-                            playSingleAudio(msg.data);
+                        if (msg.type === "audio_chunk") {
+                            enqueueAudioChunk(msg.data);
+                        } else if (msg.type === "audio") {
+                            // Backward-compatible single-blob path
+                            enqueueAudioChunk(msg.data);
+                        } else if (msg.type === "audio_end") {
+                            // No-op: the playback queue drains itself as
+                            // chunks arrive and finish playing.
+                        } else if (msg.type === "pong") {
+                            clearTimeout(heartbeatTimeout);
+                            const rtt = Date.now() - (msg.ts || lastPingSentAt);
+                            setConnection(rtt > 2000 ? "WEAK SIGNAL" : "ONLINE");
                         } else if (msg.type === "transcript") {
                             setStatus(`Boss: "${msg.text}"`);
                         } else if (msg.type === "reply_text") {
                             setStatus(`Maya: "${msg.text}"`);
                         } else if (msg.type === "image") {
                             showActionImage(msg.url);
+                        } else if (msg.type === "telegram_redirect") {
+                            if (msg.url) {
+                                window.open(msg.url, "_blank");
+                            } else {
+                                setStatus("Boss, Telegram अभी उपलब्ध नहीं है।");
+                            }
                         } else if (msg.type === "task_complete") {
                             setStatus("Maya: background task complete.");
                         }
@@ -306,18 +493,22 @@
                 };
 
                 ws.onclose = () => {
+                    stopHeartbeat();
                     if (userInitiatedStop) {
                         stopLiveCall();
                         return;
                     }
                     // Unexpected drop (network blip, server restart) - try to
                     // reconnect a few times before giving up fully, instead
-                    // of just going silently offline.
+                    // of just going silently offline. Exponential backoff
+                    // (1s, 2s, 4s, 8s, 15s cap) avoids hammering a network
+                    // that's still down, and gives it real time to recover.
                     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         reconnectAttempts++;
+                        const delay = getReconnectDelay(reconnectAttempts);
                         setConnection("RECONNECTING");
-                        setStatus(`कनेक्शन टूटा, दोबारा जोड़ रही हूँ... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                        setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, 1500);
+                        setStatus(`कनेक्शन टूटा, ${Math.round(delay / 1000)}s में दोबारा जोड़ रही हूँ... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                        setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, delay);
                     } else {
                         stopLiveCall();
                         setStatus("कनेक्शन नहीं बन पाया। दोबारा टैप करें।");
@@ -360,8 +551,13 @@
                 micSource.connect(analyser);
 
                 const mimeType = getRecorderMimeType();
-                mediaRecorder = mimeType 
-                    ? new MediaRecorder(mediaStream, { mimeType }) 
+                // 24kbps opus is plenty clear for voice and cuts upload
+                // payload size by ~60-70% vs default bitrate - the single
+                // biggest win on a slow uplink. Browsers that ignore the
+                // hint just fall back to their own default, so this is safe
+                // everywhere.
+                mediaRecorder = mimeType
+                    ? new MediaRecorder(mediaStream, { mimeType, audioBitsPerSecond: 24000 })
                     : new MediaRecorder(mediaStream);
 
                 audioChunks = [];
@@ -371,7 +567,11 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    if (audioChunks.length && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                    // Note: no longer requiring ws.readyState === OPEN here -
+                    // trySendAudioBlob() queues the recording for retry if
+                    // the socket happens to be down at this exact moment, so
+                    // a mid-drop network blip doesn't just erase what Boss said.
+                    if (audioChunks.length && !isMayaSpeaking) {
                         const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
                         const blob = new Blob(audioChunks, { type: actualMime });
                         audioChunks = [];
@@ -382,13 +582,7 @@
                         if (blob.size > 7000) {
                             const reader = new FileReader();
                             reader.onloadend = () => {
-                                if (ws && ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({
-                                        type: "audio_blob",
-                                        mime: actualMime,
-                                        data: reader.result.split(",")[1]
-                                    }));
-                                }
+                                trySendAudioBlob(actualMime, reader.result.split(",")[1]);
                             };
                             reader.readAsDataURL(blob);
                         }
@@ -447,8 +641,30 @@
             }
         }
 
-        function playSingleAudio(base64Audio) {
-            interruptPlayback();
+        /*
+           SENTENCE-CHUNK PLAYBACK QUEUE:
+           The backend now streams TTS as one small audio clip per
+           sentence instead of one giant clip for the whole reply, so
+           Maya can start speaking as soon as sentence 1 is ready
+           instead of waiting for the entire response to synthesize
+           and download. This queue plays each chunk back-to-back in
+           order, so from the user's perspective it sounds like one
+           continuous reply.
+        */
+        function enqueueAudioChunk(base64Audio) {
+            audioQueue.push(base64Audio);
+            if (!isPlayingQueue) playNextInQueue();
+        }
+
+        function playNextInQueue() {
+            if (!audioQueue.length) {
+                isPlayingQueue = false;
+                isMayaSpeaking = false;
+                orb.className = "quantum-orb";
+                return;
+            }
+
+            isPlayingQueue = true;
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
 
@@ -456,20 +672,16 @@
                 try { mediaRecorder.stop(); } catch (_) {}
             }
 
-            activeAudio = new Audio("data:audio/mp3;base64," + base64Audio);
-
-            const resumeMic = () => {
-                isMayaSpeaking = false;
-                orb.className = "quantum-orb";
-                activeAudio = null;
-            };
-
-            activeAudio.onended = resumeMic;
-            activeAudio.onerror = resumeMic;
-            activeAudio.play().catch(resumeMic);
+            const nextChunk = audioQueue.shift();
+            activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
+            activeAudio.onended = playNextInQueue;
+            activeAudio.onerror = playNextInQueue;
+            activeAudio.play().catch(playNextInQueue);
         }
 
         function interruptPlayback() {
+            audioQueue = [];
+            isPlayingQueue = false;
             if (activeAudio) {
                 activeAudio.pause();
                 activeAudio.currentTime = 0;
@@ -493,9 +705,11 @@
 
         function stopLiveCall() {
             userInitiatedStop = true;
+            stopHeartbeat();
             interruptPlayback();
             isCalling = false;
             reconnectAttempts = 0;
+            pendingAudioQueue = [];
             setConnection("OFFLINE");
             document.getElementById("callToggle").classList.remove("active");
             document.getElementById("callToggle").innerText = "📞";
