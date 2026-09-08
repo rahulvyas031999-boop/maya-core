@@ -65,20 +65,15 @@ gemini_client = (
 
 STATE_FILE = os.getenv("STATE_FILE_PATH", "maya_state.json")
 CURRENT_ACTIVE_WS: WebSocket | None = None
-_TELEGRAM_USERNAME_CACHE: str | None = None  # populated lazily by get_telegram_bot_username()
+_TELEGRAM_USERNAME_CACHE: str | None = None
 
 # ============================================================
-# NETWORK RESILIENCE TUNING
-# ------------------------------------------------------------
-# These exist so one slow/hung upstream call (Groq, Gemini,
-# Edge-TTS) can never freeze the whole live-call loop when the
-# user is on a weak connection. Every blocking external call in
-# this file goes through one of these timeouts.
+# NETWORK RESILIENCE TUNING (Timeouts to prevent freezing)
 # ============================================================
 ROUTER_TIMEOUT_SECONDS = 10
 WHISPER_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 10
-WS_IDLE_TIMEOUT_SECONDS = 40  # client pings every 15s; 40s = ~2 missed beats
+WS_IDLE_TIMEOUT_SECONDS = 40
 
 # ============================================================
 # PERSISTENT ATOMIC STORAGE
@@ -131,10 +126,6 @@ async def safe_send_json(ws: WebSocket | None, payload: dict) -> bool:
 # ============================================================
 
 async def get_telegram_bot_username() -> str | None:
-    """Resolve and cache the bot's @username so the frontend can build
-    a genuine t.me deep link for the low-bandwidth fallback mode,
-    instead of hardcoding a username that would drift out of sync
-    with whichever bot token is actually configured."""
     global _TELEGRAM_USERNAME_CACHE
     if _TELEGRAM_USERNAME_CACHE:
         return _TELEGRAM_USERNAME_CACHE
@@ -282,14 +273,6 @@ def extract_clean_json(text: str) -> Dict[str, Any]:
         pass
     return {}
 
-# Blueprint Layer 1 — "Hallucination Shield": Whisper, when fed a clip
-# that is mostly/entirely room silence, tends to hallucinate a small set
-# of stock phrases instead of returning empty text. temperature=0.0 plus
-# the context prompt reduces this but does not guarantee it, so we
-# discard the transcript outright when it consists ONLY of a known
-# phantom phrase (allowing exact match / near-exact match, not a
-# substring check, so a real sentence that happens to contain "thank
-# you" is not wrongly discarded).
 HALLUCINATION_BLACKLIST = {
     "thank you", "thanks for watching", "subtitles", "subscribe",
     "झाल", "जय हिंद", "आप सभी को धन्यवाद", "धन्यवाद",
@@ -298,7 +281,6 @@ HALLUCINATION_BLACKLIST = {
 def is_hallucinated_transcript(text: str) -> bool:
     normalized = text.strip().lower().strip(".,!?।")
     return normalized in HALLUCINATION_BLACKLIST
-
 
 async def master_router(user_input: str) -> Dict[str, Any]:
     user_input = user_input.strip()
@@ -318,10 +300,6 @@ async def master_router(user_input: str) -> Dict[str, Any]:
         ]
     )
 
-    # Deterministic fast-path (no LLM round-trip) for switching to the
-    # low-bandwidth Telegram fallback. This must NOT depend on an LLM
-    # call: if the network is already weak, the whole point is to bail
-    # out to text mode immediately, not wait on another round-trip first.
     explicit_telegram_cmd = any(
         k in clean for k in [
             "telegram pe switch", "telegram par switch", "telegram mode",
@@ -338,10 +316,6 @@ async def master_router(user_input: str) -> Dict[str, Any]:
             "screen_content": "",
         }
 
-    # Deterministic fast-path for explicit "remember this" instructions.
-    # This must NOT depend on the LLM correctly classifying intent every
-    # time — a missed classification means a permanent-memory request
-    # silently never gets saved. Detect it directly and persist it here.
     explicit_remember_cmd = any(
         k in clean for k in [
             "yaad rakh", "yaad rakhna", "yaad rakho", "hamesha yaad",
@@ -360,15 +334,10 @@ async def master_router(user_input: str) -> Dict[str, Any]:
         }
 
     active_summary = get_active_tasks_summary()
-
-    # Pull everything Maya has been told to remember so far and fold it
-    # into the router prompt as context. Without this, remember_fact()
-    # would write to the DB but nothing downstream would ever read it
-    # back, so Maya would still "start fresh" every conversation.
     known_memory = recall_memory()
     memory_context = "\n".join(
         f"- {k}: {v}" for k, v in known_memory.items()
-        if k != "active_model_registry"  # internal system config, not user-facing
+        if k != "active_model_registry"
     ) or "(kuch bhi yaad nahi hai abhi)"
 
     router_prompt = f"""
@@ -413,11 +382,6 @@ Return ONLY JSON:
                             {"role": "user", "content": router_prompt},
                         ],
                         response_format={"type": "json_object"},
-                        # FIX: 70 tokens was too tight - the JSON payload includes
-                        # task_payload (a full copy of user_input) plus several
-                        # other fields, so long user messages were getting the
-                        # response truncated mid-JSON, causing extract_clean_json
-                        # to silently fail and fall back to a generic "chat" intent.
                         max_tokens=300,
                     ),
                 ),
@@ -462,24 +426,11 @@ Return ONLY JSON:
     decision.setdefault("task_payload", user_input)
     decision.setdefault("voice_response", "जी Boss, समझ गई।")
     return decision
-
 # ============================================================
-# NEURAL SPEECH SYNTHESIS (Edge-TTS) — SENTENCE-LEVEL STREAMING
-# ------------------------------------------------------------
-# On a slow connection, generating the *entire* reply as one MP3
-# before sending anything means Maya stays silent for however long
-# the whole synthesis + transfer takes. Instead we split the reply
-# into sentence-sized chunks, synthesize + send each one as soon as
-# it's ready, and let the client start playing chunk 1 while chunk 2
-# is still being generated. This is real latency-hiding, not a fake
-# "optimizing..." spinner.
+# NEURAL SPEECH SYNTHESIS (Edge-TTS) — SENTENCE STREAMING
 # ============================================================
 
 def split_into_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
-    """Break Hindi/Hinglish text into speakable chunks on sentence
-    boundaries (।, ., !, ?) so each chunk can be synthesized and
-    streamed independently. Runs of short sentences are merged up to
-    max_chars so we don't fire off dozens of tiny TTS requests."""
     if not text:
         return []
 
@@ -500,9 +451,6 @@ def split_into_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
     if buffer:
         chunks.append(buffer)
 
-    # Guard against a single run-on chunk with no punctuation at all
-    # (e.g. a long comma-separated sentence) so one giant chunk can't
-    # still stall the stream.
     final: list[str] = []
     for chunk in chunks:
         if len(chunk) <= max_chars * 2:
@@ -510,7 +458,6 @@ def split_into_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
         else:
             final.extend(chunk[i:i + max_chars] for i in range(0, len(chunk), max_chars))
     return final
-
 
 async def synthesize_sentence(text: str) -> str:
     clean = text.replace("*", "").replace("#", "").replace("`", "").strip()
@@ -528,17 +475,13 @@ async def synthesize_sentence(text: str) -> str:
         await asyncio.wait_for(_run(), timeout=TTS_TIMEOUT_SECONDS)
         return base64.b64encode(audio.getvalue()).decode()
     except asyncio.TimeoutError:
-        print(f"[TTS TIMEOUT] Sentence synthesis exceeded {TTS_TIMEOUT_SECONDS}s, skipping this chunk.")
+        print(f"[TTS TIMEOUT] Sentence synthesis exceeded {TTS_TIMEOUT_SECONDS}s, skipping.")
         return ""
     except Exception as exc:
         print(f"[TTS SYNTHESIS ERROR] {exc}")
         return ""
 
-
 async def stream_neural_speech(ws: WebSocket, text: str) -> bool:
-    """Synthesize `text` sentence-by-sentence and push each chunk to
-    the client the moment it's ready, terminated by an audio_end
-    marker. Returns True if at least one chunk made it out."""
     sentences = split_into_speech_sentences(text)
     sent_any = False
 
@@ -550,6 +493,7 @@ async def stream_neural_speech(ws: WebSocket, text: str) -> bool:
             delivered = await safe_send_json(ws, {"type": "audio_chunk", "data": audio_b64})
             sent_any = sent_any or delivered
 
+    # Notify frontend audio queue that synthesis of this turn is fully complete
     await safe_send_json(ws, {"type": "audio_end"})
     return sent_any
 
@@ -658,10 +602,6 @@ async def get_artifacts_list():
 
 @app.get("/telegram-link")
 async def get_telegram_link():
-    """Used by the low-bandwidth fallback banner in the UI: when the
-    live voice call's network is too weak to sustain, the client
-    offers a one-tap switch to Telegram text mode, which uses a
-    fraction of the data a live call needs."""
     username = await get_telegram_bot_username()
     return {"url": f"https://t.me/{username}" if username else None}
 
@@ -676,7 +616,7 @@ async def download_or_view_artifact(file_path: str):
         return {"error": str(e)}
 
 # ============================================================
-# WEBSOCKET LIVE VOICE ENGINE (Deterministic / No Filter List)
+# WEBSOCKET LIVE VOICE ENGINE (Deterministic Audio Contract)
 # ============================================================
 
 @app.websocket("/ws/live")
@@ -684,12 +624,7 @@ async def websocket_live_call(ws: WebSocket):
     await ws.accept()
     global CURRENT_ACTIVE_WS
 
-    # Single Channel Lock (blueprint Layer 1): if a client is already
-    # connected when a new one hands shake, the old socket was only being
-    # replaced by reference here — it stayed technically open on the
-    # server until it noticed on its own and disconnected, i.e. a zombie
-    # connection. Explicitly close it so at most one live socket is ever
-    # actually open at a time.
+    # Close any existing zombie socket before taking new session
     if CURRENT_ACTIVE_WS is not None and CURRENT_ACTIVE_WS is not ws:
         try:
             await CURRENT_ACTIVE_WS.close(code=1000, reason="Replaced by new session")
@@ -710,11 +645,6 @@ async def websocket_live_call(ws: WebSocket):
             try:
                 data = await asyncio.wait_for(ws.receive_text(), timeout=WS_IDLE_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
-                # No message at all (not even a heartbeat ping) within the
-                # idle window - the socket is almost certainly half-dead
-                # (common on mobile networks: NAT timeout, tower switch,
-                # wifi-to-mobile handoff). Close it so the client's
-                # reconnect logic kicks in instead of staying silently stuck.
                 print("[WS HEARTBEAT] No client activity in idle window, closing stale socket.")
                 break
 
@@ -746,7 +676,6 @@ async def websocket_live_call(ws: WebSocket):
                     audio_file.name = f"audio{ext}"
 
                     loop = asyncio.get_running_loop()
-                    # Context conditioning with zero temperature eliminates silence hallucinations
                     transcription = await asyncio.wait_for(
                         loop.run_in_executor(
                             None,
@@ -761,6 +690,10 @@ async def websocket_live_call(ws: WebSocket):
                         timeout=WHISPER_TIMEOUT_SECONDS,
                     )
                     cand = transcription.text.strip()
+                    
+                    # Log precisely what Whisper heard and the payload size
+                    print(f"[WHISPER HEARD]: '{cand}' (Bytes: {len(wav_bytes)})")
+
                     if len(cand) > 1 and not is_hallucinated_transcript(cand):
                         user_query = cand
 
@@ -808,8 +741,6 @@ async def websocket_live_call(ws: WebSocket):
                     )
 
                 elif intent == "switch_telegram":
-                    # User explicitly asked to bail out to the low-bandwidth
-                    # fallback - this is their call, not an automatic one.
                     tg_username = await get_telegram_bot_username()
                     tg_url = f"https://t.me/{tg_username}" if tg_username else None
                     await safe_send_json(ws, {"type": "telegram_redirect", "url": tg_url})
