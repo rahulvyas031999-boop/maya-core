@@ -594,19 +594,30 @@
                 const bufferLength = analyser.frequencyBinCount;
                 const dataArray = new Uint8Array(bufferLength);
 
+                // Restrict energy averaging to the human speech band
+                // (~300Hz-3400Hz) instead of the full spectrum. Averaging
+                // across all 256 bins (up to ~24kHz on most devices) dilutes
+                // real speech energy with a huge range of near-silent high
+                // frequencies, so avgEnergy almost never crossed the
+                // threshold except when shouting directly into the mic.
+                const sampleRate = audioCtx.sampleRate || 48000;
+                const binHz = sampleRate / analyser.fftSize;
+                const voiceBinStart = Math.max(1, Math.floor(300 / binHz));
+                const voiceBinEnd = Math.min(bufferLength - 1, Math.ceil(3400 / binHz));
+
                 // Pure In-Memory Speech Activity Detection (VAD)
                 function monitorVoiceActivity() {
                     if (!isCalling) return;
 
                     analyser.getByteFrequencyData(dataArray);
                     let sum = 0;
-                    for (let i = 0; i < bufferLength; i++) {
+                    for (let i = voiceBinStart; i <= voiceBinEnd; i++) {
                         sum += dataArray[i];
                     }
-                    let avgEnergy = sum / bufferLength;
+                    let avgEnergy = sum / (voiceBinEnd - voiceBinStart + 1);
 
                     // Voiced threshold (Ignores silence and room noise)
-                    if (avgEnergy > 20 && !isMayaSpeaking) {
+                    if (avgEnergy > 12 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
