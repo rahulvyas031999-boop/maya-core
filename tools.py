@@ -1,6 +1,9 @@
 import os
+import sys
+import subprocess
 from duckduckgo_search import DDGS
 from workspace_manager import get_workspace_path
+
 
 def tool_web_search(query: str, max_results: int = 5) -> str:
     """लाइव इंटरनेट पर सर्च करके ताज़ा डेटा लाता है"""
@@ -16,6 +19,7 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Web search failed: {str(e)}"
 
+
 def tool_write_file(filepath: str, content: str) -> str:
     """सुरक्षित workspace डायरेक्टरी में असल फ़ाइल लिखता है"""
     try:
@@ -26,6 +30,7 @@ def tool_write_file(filepath: str, content: str) -> str:
         return f"File '{filepath}' saved successfully in workspace ({len(content)} chars)."
     except Exception as e:
         return f"Failed to write file '{filepath}': {str(e)}"
+
 
 def tool_read_file(filepath: str) -> str:
     """Workspace के अंदर से फ़ाइल का वास्तविक कंटेंट पढ़ता है"""
@@ -38,10 +43,51 @@ def tool_read_file(filepath: str) -> str:
     except Exception as e:
         return f"Failed to read file '{filepath}': {str(e)}"
 
+
+def tool_execute_python(code: str) -> str:
+    """
+    Sandboxed Python execution.
+    NOTE: This runs in a separate OS subprocess with a hard timeout and its
+    working directory locked to /workspace, which stops it from touching
+    files outside the workspace. It does NOT provide full sandboxing
+    (no network/memory/CPU limits) - for untrusted, internet-facing use you
+    should additionally run this inside a locked-down container
+    (e.g. `docker run --rm --network none --memory 128m ...`).
+    """
+    try:
+        safe_cwd = get_workspace_path(".")
+        os.makedirs(safe_cwd, exist_ok=True)
+
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=safe_cwd,
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        output = f"Exit Code: {result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+
+        # Guard against blowing up the LLM's token budget on runaway prints
+        if len(output) > 4000:
+            output = output[:4000] + "\n...[truncated]"
+
+        return output
+
+    except subprocess.TimeoutExpired:
+        return "Error: Execution timed out after 15 seconds."
+    except Exception as e:
+        return f"Execution failed: {str(e)}"
+
+
 AVAILABLE_TOOLS = {
     "web_search": tool_web_search,
     "write_file": tool_write_file,
-    "read_file": tool_read_file
+    "read_file": tool_read_file,
+    "execute_python": tool_execute_python,
 }
 
 TOOL_SCHEMAS = [
@@ -85,6 +131,20 @@ TOOL_SCHEMAS = [
                     "filepath": {"type": "string", "description": "Filename or relative path inside workspace"}
                 },
                 "required": ["filepath"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_python",
+            "description": "Execute a snippet of Python code in a sandboxed subprocess (15s timeout) for calculations, data processing, or verifying generated code. Returns stdout, stderr, and exit code.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python source code to execute"}
+                },
+                "required": ["code"]
             }
         }
     }
