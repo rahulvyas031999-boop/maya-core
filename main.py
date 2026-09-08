@@ -6,15 +6,25 @@ import json
 import base64
 import asyncio
 import urllib.parse
+from typing import Dict, Any
+
 import httpx
 import edge_tts
-from typing import Dict, Any, List
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
+
 from groq import Groq
 from google import genai
+
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 from agent_loop import run_react_agent
 from task_queue import (
@@ -25,214 +35,333 @@ from task_queue import (
     update_task_status,
     get_active_tasks_summary,
     get_unprocessed_tasks,
-    remember_fact,
-    recall_memory
 )
-from workspace_manager import list_artifacts, get_workspace_path, WORKSPACE_DIR
+
+from workspace_manager import (
+    list_artifacts,
+    get_workspace_path,
+    WORKSPACE_DIR,
+)
+
+# ============================================================
+# APPLICATION INITIALIZATION
+# ============================================================
 
 app = FastAPI(title="Maya Sovereign Meta-Agent OS")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-RENDER_APP_URL = os.getenv("RENDER_EXTERNAL_URL", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+RENDER_APP_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"}) if GEMINI_API_KEY else None
+gemini_client = (
+    genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version": "v1alpha"})
+    if GEMINI_API_KEY
+    else None
+)
 
-STATE_FILE = "maya_state.json"
-CURRENT_ACTIVE_WS: WebSocket = None
+STATE_FILE = os.getenv("STATE_FILE_PATH", "maya_state.json")
+CURRENT_ACTIVE_WS: WebSocket | None = None
 
-# VERIFIED GHOST PHRASES (Including 'झाल' and Whisper Hallucinations)
-GHOST_PHRASES = [
-    "झाल", "zhal", "subtitles", "thank you", "watching", "amara.org", 
-    "subscribe", "you", "bye", "thanks", "dhanyawad", "foreign", "[music]"
-]
+# ============================================================
+# PERSISTENT ATOMIC STORAGE
+# ============================================================
 
 def load_json(filepath: str, default: Any) -> Any:
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return default
-
-def save_json(filepath: str, data: Any):
+    if not os.path.exists(filepath):
+        return default
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        print(f"[STORAGE READ ERROR] {exc}")
+        return default
+
+def save_json(filepath: str, data: Any) -> None:
+    try:
+        temp = filepath + ".tmp"
+        with open(temp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[STORAGE ERROR]: {e}")
+        os.replace(temp, filepath)
+    except Exception as exc:
+        print(f"[STORAGE WRITE ERROR] {exc}")
 
 def get_boss_chat_id() -> str:
-    return load_json(STATE_FILE, {}).get("boss_chat_id", "")
+    return str(load_json(STATE_FILE, {}).get("boss_chat_id", ""))
 
-def save_boss_chat_id(chat_id: str):
+def save_boss_chat_id(chat_id: str) -> None:
     data = load_json(STATE_FILE, {})
     data["boss_chat_id"] = str(chat_id)
     save_json(STATE_FILE, data)
 
-async def dispatch_to_telegram(text: str = None, photo_url: str = None, document_path: str = None, caption: str = ""):
+# ============================================================
+# CRASH-PROOF WEBSOCKET WRAPPER
+# ============================================================
+
+async def safe_send_json(ws: WebSocket | None, payload: dict) -> bool:
+    if ws is None:
+        return False
+    try:
+        if getattr(ws.client_state, "name", "") == "CONNECTED":
+            await ws.send_json(payload)
+            return True
+    except Exception as exc:
+        print(f"[WS SHIELD] Dropped payload on dead socket: {exc}")
+    return False
+
+# ============================================================
+# TELEGRAM DISPATCH GATEWAY
+# ============================================================
+
+async def dispatch_to_telegram(
+    text: str | None = None,
+    photo_url: str | None = None,
+    document_path: str | None = None,
+    caption: str = "",
+):
     chat_id = get_boss_chat_id()
     if not chat_id or not TELEGRAM_BOT_TOKEN:
         return
-    async with httpx.AsyncClient() as client:
-        try:
+
+    try:
+        async with httpx.AsyncClient() as client:
             if photo_url:
                 await client.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
-                    json={"chat_id": chat_id, "photo": photo_url, "caption": caption or "✨ Visual Delivery"},
-                    timeout=15.0
+                    json={
+                        "chat_id": chat_id,
+                        "photo": photo_url,
+                        "caption": caption or "✨ Visual Delivery",
+                    },
+                    timeout=20,
                 )
-            if document_path and os.path.exists(document_path):
-                file_name = os.path.basename(document_path)
-                with open(document_path, "rb") as f:
-                    files = {"document": (file_name, f.read())}
-                    await client.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
-                        data={"chat_id": chat_id, "caption": caption or f"📁 Generated File: {file_name}"},
-                        files=files,
-                        timeout=30.0
-                    )
+
+            if document_path:
+                safe_document = get_workspace_path(
+                    os.path.relpath(document_path, WORKSPACE_DIR)
+                )
+                if os.path.isfile(safe_document):
+                    file_name = os.path.basename(safe_document)
+                    with open(safe_document, "rb") as f:
+                        files = {"document": (file_name, f)}
+                        await client.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+                            data={"chat_id": chat_id, "caption": caption or f"📁 {file_name}"},
+                            files=files,
+                            timeout=30,
+                        )
+
             if text:
-                chunks = [text[i:i+3800] for i in range(0, len(text), 3800)] if len(text) > 4000 else [text]
-                for ch in chunks:
+                chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)]
+                for chunk in chunks:
                     await client.post(
                         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                        json={"chat_id": chat_id, "text": ch},
-                        timeout=15.0
+                        json={"chat_id": chat_id, "text": chunk},
+                        timeout=15,
                     )
-        except Exception as e:
-            print(f"[TELEGRAM DISPATCH ERROR]: {e}")
+    except Exception as exc:
+        print(f"[TELEGRAM DISPATCH ERROR] {exc}")
+
+# ============================================================
+# DECOUPLED ASYNC BACKGROUND WORKER
+# ============================================================
 
 async def run_autonomous_worker(task_id: str, initial_prompt: str):
-    print(f"[HEAVY WORKER] Task {task_id} launched: {initial_prompt}")
-    update_task_status(task_id, "processing")
-    await asyncio.sleep(2)
+    print(f"[WORKER START] Task: {task_id}")
+    try:
+        update_task_status(task_id, "processing")
+        task_info = get_task(task_id)
 
-    task_info = get_task(task_id)
-    mods = task_info.get("modifications", []) if task_info else []
-    full_spec = initial_prompt
-    if mods:
-        full_spec += "\n\n[USER MODIFICATIONS APPLIED MID-CALL]:\n" + "\n".join([f"- {m}" for m in mods])
+        modifications = []
+        if task_info:
+            modifications = task_info.get("modifications", []) or []
 
-    final_delivery = await run_react_agent(full_spec)
-    update_task_status(task_id, "completed", final_delivery)
+        full_spec = initial_prompt
+        if modifications:
+            full_spec += "\n\n[USER MODIFICATIONS APPLIED]:\n" + "\n".join(f"- {m}" for m in modifications)
 
-    report_msg = f"🚀 **AUTONOMOUS TASK DEPLOYED, BOSS!**\n\n📌 **Task:** `{initial_prompt}`\n\n{final_delivery}"
-    await dispatch_to_telegram(text=report_msg)
+        final_delivery = await run_react_agent(full_spec)
+        success = not final_delivery.startswith("[AGENT_ERROR]")
 
-    all_files = list_artifacts()
-    if all_files:
-        latest_file = all_files[-1]
-        actual_file_path = get_workspace_path(latest_file["relative_path"])
-        await dispatch_to_telegram(
-            document_path=actual_file_path, 
-            caption=f"📁 Boss, यहाँ आपकी फ़ाइल है: {latest_file['filename']}"
+        update_task_status(task_id, "completed" if success else "failed", final_delivery)
+
+        report_msg = (
+            "🚀 MAYA AUTONOMOUS TASK REPORT\n\n"
+            f"Prompt: {initial_prompt}\n\n"
+            f"{final_delivery}"
         )
+        await dispatch_to_telegram(text=report_msg)
 
-    global CURRENT_ACTIVE_WS
-    if CURRENT_ACTIVE_WS:
-        try:
-            await CURRENT_ACTIVE_WS.send_json({
-                "type": "reply_text",
-                "text": f"Boss, बैकग्राउंड टास्क पूरा हो गया है। रिपोर्ट टेलीग्राम पर भेज दी है।"
-            })
-        except Exception:
-            pass
+        artifacts = list_artifacts()
+        if artifacts:
+            latest = artifacts[-1]
+            try:
+                actual_path = get_workspace_path(latest["relative_path"])
+                await dispatch_to_telegram(
+                    document_path=actual_path,
+                    caption=f"📁 Generated File: {latest['filename']}",
+                )
+            except Exception as exc:
+                print(f"[ARTIFACT ERROR] {exc}")
+
+        global CURRENT_ACTIVE_WS
+        if CURRENT_ACTIVE_WS:
+            await safe_send_json(
+                CURRENT_ACTIVE_WS,
+                {
+                    "type": "task_complete",
+                    "task_id": task_id,
+                    "success": success,
+                    "text": "Boss, बैकग्राउंड टास्क पूरा हो गया है।",
+                },
+            )
+
+    except Exception as exc:
+        print(f"[WORKER ERROR] {task_id}: {exc}")
+        update_task_status(task_id, "failed", f"Worker error: {exc}")
+        await dispatch_to_telegram(text=f"❌ Task {task_id} failed:\n{exc}")
+
+# ============================================================
+# MASTER ROUTER (Intent Classifier)
+# ============================================================
 
 def extract_clean_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
     try:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
         return json.loads(text)
     except Exception:
-        return {}
+        pass
+    try:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            return json.loads(match.group(0))
+    except Exception:
+        pass
+    return {}
 
 async def master_router(user_input: str) -> Dict[str, Any]:
-    clean_inp = user_input.lower().strip()
-    words = clean_inp.split()
-
-    if len(words) <= 2 and not any(k in clean_inp for k in ["banao", "generate", "search"]):
+    user_input = user_input.strip()
+    if not user_input:
         return {
             "intent": "chat",
-            "voice_response": "जी Boss, बताइए मैं आपके लिए क्या करूँ?",
-            "task_payload": user_input,
-            "screen_content": ""
+            "voice_response": "जी Boss, मैं सुन रही हूँ।",
+            "task_payload": "",
+            "screen_content": "",
         }
 
-    explicit_image_cmd = any(k in clean_inp for k in ["photo banao", "image banao", "tasveer banao", "generate image", "chitra banao"])
-    active_summary = get_active_tasks_summary()
-
-    router_prompt = (
-        f"You are Maya, an ultra-smart, loyal FEMALE AI Executive for Boss.\n"
-        f"GENDER RULE: Strictly speak as a female in Hindi/Hinglish (ALWAYS use 'करती हूँ', 'बताती हूँ'. NEVER use male 'करता हूँ').\n"
-        f"ACTIVE BACKGROUND TASKS: {json.dumps(active_summary, ensure_ascii=False)}\n"
-        f"BOSS INPUT: \"{user_input}\"\n\n"
-        "Return STRICT JSON only:\n"
-        "{\n"
-        "  \"intent\": \"chat\" | \"new_heavy_task\" | \"modify_task\" | \"generate_image\",\n"
-        "  \"voice_response\": \"Strictly 1 natural, crisp female sentence in Hindi/Hinglish to speak to Boss\",\n"
-        "  \"task_id\": \"id of active task if modify_task else empty\",\n"
-        "  \"task_payload\": \"full clean spec or image prompt\",\n"
-        "  \"screen_content\": \"structured text/code for HUD viewer or empty\"\n"
-        "}"
+    clean = user_input.lower()
+    explicit_image_cmd = any(
+        k in clean for k in [
+            "photo banao", "image banao", "tasveer banao", 
+            "generate image", "chitra banao", "इमेज बनाओ", "फोटो बनाओ"
+        ]
     )
 
+    active_summary = get_active_tasks_summary()
+
+    router_prompt = f"""
+You are Maya, a female AI executive.
+Always answer in Hindi/Hinglish.
+Use female grammar: "करती हूँ", "बताती हूँ", "कर रही हूँ".
+Never use male forms: "करता हूँ", "बताता हूँ".
+
+Classify the user's request into: chat | new_heavy_task | modify_task | generate_image
+
+ACTIVE TASKS:
+{json.dumps(active_summary, ensure_ascii=False)}
+
+USER:
+{user_input}
+
+Return ONLY JSON:
+{{
+  "intent": "chat",
+  "voice_response": "one short crisp Hindi sentence",
+  "task_id": "",
+  "task_payload": "{user_input}",
+  "screen_content": ""
+}}
+"""
+
     decision = {}
+
     if groq_client:
         try:
             loop = asyncio.get_running_loop()
-            res = await loop.run_in_executor(
+            response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": "You are Maya Master Router. Output valid JSON only with female grammar."},
-                        {"role": "user", "content": router_prompt}
-                    ],
                     model="openai/gpt-oss-20b",
-                    max_tokens=70,
-                    response_format={"type": "json_object"}
-                )
+                    messages=[
+                        {"role": "system", "content": "You are Maya Master Router. Return valid JSON only with female grammar."},
+                        {"role": "user", "content": router_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    # FIX: 70 tokens was too tight - the JSON payload includes
+                    # task_payload (a full copy of user_input) plus several
+                    # other fields, so long user messages were getting the
+                    # response truncated mid-JSON, causing extract_clean_json
+                    # to silently fail and fall back to a generic "chat" intent.
+                    max_tokens=300,
+                ),
             )
-            decision = extract_clean_json(res.choices[0].message.content)
-        except Exception as e:
-            print(f"[ROUTER GROQ WARNING]: {e}. Switching to Gemini...")
+            decision = extract_clean_json(response.choices[0].message.content)
+        except Exception as exc:
+            print(f"[ROUTER GROQ WARNING] {exc}. Switching to Gemini...")
 
     if not decision and gemini_client:
         try:
-            res = gemini_client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=router_prompt
+            response = await asyncio.to_thread(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=router_prompt,
+                )
             )
-            decision = extract_clean_json(res.text)
-        except Exception as ge:
-            print(f"[ROUTER GEMINI WARNING]: {ge}")
+            decision = extract_clean_json(response.text)
+        except Exception as exc:
+            print(f"[ROUTER GEMINI WARNING] {exc}")
+
+    valid_intents = {"chat", "new_heavy_task", "modify_task", "generate_image"}
+    if decision.get("intent") not in valid_intents:
+        decision = {
+            "intent": "chat",
+            "voice_response": "जी Boss, बताइए मैं क्या करूँ?",
+            "task_payload": user_input,
+            "screen_content": "",
+        }
 
     if decision.get("intent") == "generate_image" and not explicit_image_cmd:
         decision["intent"] = "chat"
-        decision["voice_response"] = "जी Boss, क्या आप चाहते हैं कि मैं इसकी इमेज बनाऊँ?"
+        decision["voice_response"] = "जी Boss, क्या आप इसकी इमेज बनवाना चाहते हैं?"
 
-    return decision or {
-        "intent": "chat",
-        "voice_response": "जी Boss, बताइए आगे क्या करना है?",
-        "task_payload": user_input,
-        "screen_content": ""
-    }
+    decision.setdefault("task_payload", user_input)
+    decision.setdefault("voice_response", "जी Boss, समझ गई।")
+    return decision
+
+# ============================================================
+# NEURAL SPEECH SYNTHESIS (Edge-TTS)
+# ============================================================
 
 async def generate_neural_speech(text: str) -> str:
+    if not text:
+        return ""
     try:
-        clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
-        communicate = edge_tts.Communicate(clean_text, voice="hi-IN-SwaraNeural")
-        audio_stream = io.BytesIO()
+        clean = text.replace("*", "").replace("#", "").replace("`", "").strip()
+        audio = io.BytesIO()
+        communicate = edge_tts.Communicate(clean, voice="hi-IN-SwaraNeural")
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
-                audio_stream.write(chunk["data"])
-        return base64.b64encode(audio_stream.getvalue()).decode("utf-8")
-    except Exception:
+                audio.write(chunk["data"])
+        return base64.b64encode(audio.getvalue()).decode()
+    except Exception as exc:
+        print(f"[TTS SYNTHESIS ERROR] {exc}")
         return ""
+
+# ============================================================
+# TELEGRAM SERVICE
+# ============================================================
 
 async def run_telegram_gateway():
     if not TELEGRAM_BOT_TOKEN:
@@ -241,52 +370,68 @@ async def run_telegram_gateway():
         application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
         async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            chat_id = update.effective_chat.id
-            save_boss_chat_id(str(chat_id))
-            await update.message.reply_text("नमस्ते Boss! Maya Sovereign Core सक्रिय है।")
+            if not update.effective_chat or not update.message:
+                return
+            save_boss_chat_id(str(update.effective_chat.id))
+            await update.message.reply_text("नमस्ते Boss! Maya Core online है।")
 
         async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            chat_id = update.effective_chat.id
-            save_boss_chat_id(str(chat_id))
-            text = update.message.text.strip()
+            if not update.message or not update.effective_chat:
+                return
+            text = (update.message.text or "").strip()
+            if not text:
+                return
 
+            save_boss_chat_id(str(update.effective_chat.id))
             decision = await master_router(text)
             intent = decision.get("intent", "chat")
             payload = decision.get("task_payload") or text
 
             if intent == "generate_image":
-                img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                image_url = (
+                    "https://image.pollinations.ai/prompt/"
+                    + urllib.parse.quote(payload)
+                    + "?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                )
                 try:
-                    await update.message.reply_photo(photo=img_url, caption=f"✨ Boss, इमेज तैयार है:\n🎯 {payload}")
+                    await update.message.reply_photo(
+                        photo=image_url,
+                        caption="✨ Boss, image तैयार है.",
+                    )
                 except Exception:
-                    await update.message.reply_text(f"Boss, लिंक: {img_url}")
+                    await update.message.reply_text(image_url)
 
             elif intent == "new_heavy_task":
-                tid = f"task_{int(time.time())}"
-                create_task(tid, payload)
-                asyncio.create_task(run_autonomous_worker(tid, payload))
-                await update.message.reply_text("Boss, मैंने बैकग्राउंड में काम शुरू कर दिया है। पूरा होते ही यहाँ फ़ाइल भेज दूँगी।")
+                task_id = f"task_{time.time_ns()}"
+                create_task(task_id, payload)
+                asyncio.create_task(run_autonomous_worker(task_id, payload))
+                await update.message.reply_text("Boss, काम background में शुरू कर रही हूँ।")
 
             elif intent == "modify_task":
-                tid = decision.get("task_id") or get_latest_active_task_id()
-                if tid and append_modification(tid, payload):
-                    await update.message.reply_text("Boss, रनिंग टास्क में बदलाव जोड़ दिया गया है।")
+                task_id = decision.get("task_id") or get_latest_active_task_id()
+                if task_id and append_modification(task_id, payload):
+                    await update.message.reply_text("Boss, running task में modification जोड़ दिया है।")
                 else:
-                    new_tid = f"task_{int(time.time())}"
-                    create_task(new_tid, payload)
-                    asyncio.create_task(run_autonomous_worker(new_tid, payload))
-                    await update.message.reply_text("Boss, नए टास्क के रूप में शुरू कर रही हूँ।")
+                    task_id = f"task_{time.time_ns()}"
+                    create_task(task_id, payload)
+                    asyncio.create_task(run_autonomous_worker(task_id, payload))
+                    await update.message.reply_text("Boss, नया task शुरू कर रही हूँ।")
 
             else:
                 await update.message.reply_text(decision.get("voice_response", "जी Boss!"))
 
         application.add_handler(CommandHandler("start", start_cmd))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
         await application.initialize()
         await application.start()
         await application.updater.start_polling(drop_pending_updates=True)
-    except Exception as e:
-        print(f"[TELEGRAM WARNING]: {e}")
+    except Exception as exc:
+        print(f"[TELEGRAM ENGINE ERROR] {exc}")
+
+# ============================================================
+# LIFECYCLE & HTTP ROUTES
+# ============================================================
 
 @app.on_event("startup")
 async def startup():
@@ -307,7 +452,7 @@ async def startup():
 
     unprocessed = get_unprocessed_tasks()
     for t in unprocessed:
-        asyncio.create_task(run_autonomous_worker(t['task_id'], t['prompt']))
+        asyncio.create_task(run_autonomous_worker(t["task_id"], t["prompt"]))
 
 @app.get("/health")
 async def health():
@@ -327,23 +472,24 @@ async def download_or_view_artifact(file_path: str):
     except Exception as e:
         return {"error": str(e)}
 
+# ============================================================
+# WEBSOCKET LIVE VOICE ENGINE (Deterministic / No Filter List)
+# ============================================================
+
 @app.websocket("/ws/live")
 async def websocket_live_call(ws: WebSocket):
-    global CURRENT_ACTIVE_WS
     await ws.accept()
-
-    if CURRENT_ACTIVE_WS is not None:
-        try:
-            await CURRENT_ACTIVE_WS.close()
-        except Exception:
-            pass
+    global CURRENT_ACTIVE_WS
     CURRENT_ACTIVE_WS = ws
 
-    welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
-    welcome_audio = await generate_neural_speech(welcome_text)
-    if welcome_audio:
-        await ws.send_json({"type": "audio", "data": welcome_audio})
-        await ws.send_json({"type": "reply_text", "text": welcome_text})
+    try:
+        welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
+        welcome_audio = await generate_neural_speech(welcome_text)
+        if welcome_audio:
+            await safe_send_json(ws, {"type": "audio", "data": welcome_audio})
+            await safe_send_json(ws, {"type": "reply_text", "text": welcome_text})
+    except Exception as ge:
+        print(f"[WELCOME GREETING ERROR]: {ge}")
 
     try:
         while True:
@@ -357,29 +503,40 @@ async def websocket_live_call(ws: WebSocket):
             elif msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
-                    if len(wav_bytes) >= 7000:
-                        audio_file = io.BytesIO(wav_bytes)
-                        audio_file.name = "audio.wav"
-                        loop = asyncio.get_running_loop()
-                        transcription = await loop.run_in_executor(
-                            None,
-                            lambda: groq_client.audio.transcriptions.create(
-                                file=audio_file, 
-                                model="whisper-large-v3-turbo", 
-                                language="hi"
-                            )
+                    incoming_mime = msg.get("mime", "audio/webm").lower()
+
+                    ext = ".webm"
+                    if "mp4" in incoming_mime:
+                        ext = ".mp4"
+                    elif "ogg" in incoming_mime:
+                        ext = ".ogg"
+                    elif "wav" in incoming_mime:
+                        ext = ".wav"
+
+                    audio_file = io.BytesIO(wav_bytes)
+                    audio_file.name = f"audio{ext}"
+
+                    loop = asyncio.get_running_loop()
+                    # Context conditioning with zero temperature eliminates silence hallucinations
+                    transcription = await loop.run_in_executor(
+                        None,
+                        lambda: groq_client.audio.transcriptions.create(
+                            file=audio_file, 
+                            model="whisper-large-v3-turbo", 
+                            language="hi",
+                            prompt="नमस्ते माया, मुझे आपसे कुछ पूछना है।",
+                            temperature=0.0
                         )
-                        cand = transcription.text.strip()
-                        clean_check = cand.lower().strip()
-                        if clean_check not in GHOST_PHRASES and not any(g in clean_check for g in GHOST_PHRASES) and len(clean_check) > 2:
-                            user_query = cand
-                        else:
-                            print(f"[GHOST BLOCKED]: Filtered out phantom text '{cand}'")
+                    )
+                    cand = transcription.text.strip()
+                    if len(cand) > 1:
+                        user_query = cand
+
                 except Exception as e:
-                    print(f"[WHISPER ERROR]: {e}")
+                    print(f"[WHISPER TRANSCRIPTION ERROR]: {e}")
 
             if user_query:
-                await ws.send_json({"type": "transcript", "text": user_query})
+                await safe_send_json(ws, {"type": "transcript", "text": user_query})
 
                 decision = await master_router(user_query)
                 intent = decision.get("intent", "chat")
@@ -387,7 +544,7 @@ async def websocket_live_call(ws: WebSocket):
                 payload = decision.get("task_payload") or user_query
 
                 if intent == "new_heavy_task":
-                    tid = f"task_{int(time.time())}"
+                    tid = f"task_{time.time_ns()}"
                     create_task(tid, payload)
                     asyncio.create_task(run_autonomous_worker(tid, payload))
 
@@ -396,22 +553,32 @@ async def websocket_live_call(ws: WebSocket):
                     if tid and append_modification(tid, payload):
                         voice_msg = "Boss, बैकग्राउंड टास्क में नया बदलाव जोड़ दिया है।"
                     else:
-                        new_tid = f"task_{int(time.time())}"
+                        new_tid = f"task_{time.time_ns()}"
                         create_task(new_tid, payload)
                         asyncio.create_task(run_autonomous_worker(new_tid, payload))
-                        voice_msg = "Boss, मैंने नया बैकग्राउंड टास्क शुरू कर दिया है।"
+                        voice_msg = "Boss, नया बैकग्राउंड टास्क शुरू कर रही हूँ।"
 
                 elif intent == "generate_image":
-                    img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(payload)}?model=flux&width=1024&height=1024&nologo=true&enhance=true"
-                    await ws.send_json({"type": "image", "url": img_url})
-                    asyncio.create_task(dispatch_to_telegram(photo_url=img_url, caption=f"✨ Live Image: {payload}"))
+                    img_url = (
+                        "https://image.pollinations.ai/prompt/"
+                        + urllib.parse.quote(payload)
+                        + "?model=flux&width=1024&height=1024&nologo=true&enhance=true"
+                    )
+                    await safe_send_json(ws, {"type": "image", "url": img_url})
+                    asyncio.create_task(
+                        dispatch_to_telegram(photo_url=img_url, caption=f"✨ Live Image: {payload}")
+                    )
 
-                await ws.send_json({"type": "reply_text", "text": voice_msg})
+                await safe_send_json(ws, {"type": "reply_text", "text": voice_msg})
                 speech_b64 = await generate_neural_speech(voice_msg)
                 if speech_b64:
-                    await ws.send_json({"type": "audio", "data": speech_b64})
+                    await safe_send_json(ws, {"type": "audio", "data": speech_b64})
 
     except WebSocketDisconnect:
+        print("[WS INFO] WebSocket closed gracefully by client.")
+    except Exception as err:
+        print(f"[WS RUNTIME ERROR] {err}")
+    finally:
         if CURRENT_ACTIVE_WS == ws:
             CURRENT_ACTIVE_WS = None
 
