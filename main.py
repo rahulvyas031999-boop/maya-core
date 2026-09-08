@@ -68,7 +68,7 @@ CURRENT_ACTIVE_WS: WebSocket | None = None
 _TELEGRAM_USERNAME_CACHE: str | None = None
 
 # ============================================================
-# NETWORK RESILIENCE TUNING (Timeouts to prevent freezing)
+# NETWORK RESILIENCE TUNING
 # ============================================================
 ROUTER_TIMEOUT_SECONDS = 10
 WHISPER_TIMEOUT_SECONDS = 15
@@ -426,6 +426,7 @@ Return ONLY JSON:
     decision.setdefault("task_payload", user_input)
     decision.setdefault("voice_response", "जी Boss, समझ गई।")
     return decision
+
 # ============================================================
 # NEURAL SPEECH SYNTHESIS (Edge-TTS) — SENTENCE STREAMING
 # ============================================================
@@ -493,18 +494,23 @@ async def stream_neural_speech(ws: WebSocket, text: str) -> bool:
             delivered = await safe_send_json(ws, {"type": "audio_chunk", "data": audio_b64})
             sent_any = sent_any or delivered
 
-    # Notify frontend audio queue that synthesis of this turn is fully complete
     await safe_send_json(ws, {"type": "audio_end"})
     return sent_any
 
 # ============================================================
-# TELEGRAM SERVICE
+# TELEGRAM SERVICE (Hardened against 409 Conflict)
 # ============================================================
 
 async def run_telegram_gateway():
     if not TELEGRAM_BOT_TOKEN:
         return
     try:
+        async with httpx.AsyncClient() as client:
+            await client.get(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true",
+                timeout=10.0
+            )
+
         application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
         async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -532,10 +538,7 @@ async def run_telegram_gateway():
                     + "?model=flux&width=1024&height=1024&nologo=true&enhance=true"
                 )
                 try:
-                    await update.message.reply_photo(
-                        photo=image_url,
-                        caption="✨ Boss, image तैयार है.",
-                    )
+                    await update.message.reply_photo(photo=image_url, caption="✨ Boss, image तैयार है.")
                 except Exception:
                     await update.message.reply_text(image_url)
 
@@ -616,7 +619,7 @@ async def download_or_view_artifact(file_path: str):
         return {"error": str(e)}
 
 # ============================================================
-# WEBSOCKET LIVE VOICE ENGINE (Deterministic Audio Contract)
+# WEBSOCKET LIVE VOICE ENGINE
 # ============================================================
 
 @app.websocket("/ws/live")
@@ -624,7 +627,6 @@ async def websocket_live_call(ws: WebSocket):
     await ws.accept()
     global CURRENT_ACTIVE_WS
 
-    # Close any existing zombie socket before taking new session
     if CURRENT_ACTIVE_WS is not None and CURRENT_ACTIVE_WS is not ws:
         try:
             await CURRENT_ACTIVE_WS.close(code=1000, reason="Replaced by new session")
@@ -691,7 +693,6 @@ async def websocket_live_call(ws: WebSocket):
                     )
                     cand = transcription.text.strip()
                     
-                    # Log precisely what Whisper heard and the payload size
                     print(f"[WHISPER HEARD]: '{cand}' (Bytes: {len(wav_bytes)})")
 
                     if len(cand) > 1 and not is_hallucinated_transcript(cand):
