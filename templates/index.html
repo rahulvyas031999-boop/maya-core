@@ -62,6 +62,7 @@
             width: 6px; height: 6px; border-radius: 50%;
             background: var(--cyan);
             box-shadow: 0 0 8px var(--cyan);
+            transition: background 0.3s ease, box-shadow 0.3s ease;
         }
         #mainStage {
             flex: 1;
@@ -149,6 +150,33 @@
             cursor: pointer;
         }
         .close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
+        
+        #telegramFallback {
+            width: 100%;
+            max-width: 480px;
+            background: var(--glass);
+            border: 1px solid rgba(255, 200, 0, 0.4);
+            border-radius: 12px;
+            padding: 10px 14px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        #telegramFallback p {
+            font-size: 0.8rem;
+            color: #ffd166;
+            text-align: center;
+            font-weight: 600;
+        }
+        .fallback-btns { display: flex; gap: 8px; width: 100%; }
+        .telegram-btn {
+            background: rgba(255, 209, 102, 0.15);
+            color: #ffd166;
+            border-color: #ffd166;
+        }
+
         #controls {
             width: 100%;
             max-width: 480px;
@@ -187,6 +215,7 @@
         .round-btn.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
             border-color: var(--red);
+            box-shadow: 0 0 25px rgba(255, 0, 85, 0.6);
         }
         .stop-btn {
             width: 44px; height: 44px;
@@ -241,6 +270,14 @@
         </div>
     </div>
 
+    <div id="telegramFallback">
+        <p>⚠️ नेटवर्क कमज़ोर लग रहा है। Telegram पर low-bandwidth mode try करें?</p>
+        <div class="fallback-btns">
+            <a id="telegramLinkBtn" href="#" target="_blank" class="holo-btn telegram-btn">💬 TELEGRAM MODE</a>
+            <button onclick="dismissTelegramFallback()" class="holo-btn close-btn">❌ रहने दो</button>
+        </div>
+    </div>
+
     <div id="controls">
         <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
         <div class="btn-row">
@@ -259,9 +296,23 @@
         let packetsSent = 0;
         let userInitiatedStop = false;
 
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+
+        let pendingAudioQueue = [];
+        const MAX_PENDING_AUDIO = 5;
+
         let heartbeatInterval = null;
+        let heartbeatTimeout = null;
+        let lastPingSentAt = 0;
+
         let audioQueue = [];
         let isPlayingQueue = false;
+
+        let telegramLink = null;
+        let weakNetworkTimer = null;
+        let fallbackDismissedThisSpell = false;
+        const WEAK_NETWORK_FALLBACK_DELAY = 6000;
 
         const orb = document.getElementById("orb");
         const statusLabel = document.getElementById("statusLabel");
@@ -269,12 +320,88 @@
         const cardImage = document.getElementById("cardImage");
         const downloadBtn = document.getElementById("downloadBtn");
         const connectionState = document.getElementById("connectionState");
+        const telegramFallback = document.getElementById("telegramFallback");
+        const telegramLinkBtn = document.getElementById("telegramLinkBtn");
         const debugBadge = document.getElementById("debugBadge");
+        const hudDot = document.querySelector(".hud-dot");
+
+        fetch("/telegram-link")
+            .then(r => r.json())
+            .then(data => { telegramLink = data.url; })
+            .catch(() => { telegramLink = null; });
+
+        function maybeShowTelegramFallback() {
+            if (!telegramLink || fallbackDismissedThisSpell) return;
+            telegramLinkBtn.href = telegramLink;
+            telegramFallback.style.display = "flex";
+        }
+
+        function dismissTelegramFallback() {
+            fallbackDismissedThisSpell = true;
+            telegramFallback.style.display = "none";
+        }
+
+        function hideTelegramFallback() {
+            telegramFallback.style.display = "none";
+        }
+
+        const CONNECTION_COLORS = {
+            "ONLINE": "#00f3ff",
+            "WEAK SIGNAL": "#ffd166",
+            "RECONNECTING": "#ff9f1c",
+            "OFFLINE": "#5a6472",
+        };
 
         function setStatus(text) { statusLabel.innerText = text; }
-        function setConnection(text) { connectionState.innerText = text; }
 
-        async function toggleCall() {
+        function setConnection(text) {
+            connectionState.innerText = text;
+            const color = CONNECTION_COLORS[text] || CONNECTION_COLORS.ONLINE;
+            hudDot.style.background = color;
+            hudDot.style.boxShadow = `0 0 8px ${color}`;
+
+            if (text === "WEAK SIGNAL" || text === "RECONNECTING") {
+                if (!weakNetworkTimer) {
+                    weakNetworkTimer = setTimeout(maybeShowTelegramFallback, WEAK_NETWORK_FALLBACK_DELAY);
+                }
+            } else {
+                clearTimeout(weakNetworkTimer);
+                weakNetworkTimer = null;
+                if (text === "ONLINE" || text === "OFFLINE") {
+                    fallbackDismissedThisSpell = false;
+                    hideTelegramFallback();
+                }
+            }
+        }
+
+        setConnection("OFFLINE");
+
+        function getReconnectDelay(attempt) {
+            return Math.min(1000 * Math.pow(2, attempt), 15000);
+        }
+
+        function trySendAudioBlob(mime, base64Data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(JSON.stringify({ type: "audio_blob", mime, data: base64Data }));
+                    packetsSent++;
+                    debugBadge.innerHTML = `mic: ACTIVE <br> sent: ${packetsSent}`;
+                    return;
+                } catch (err) {
+                    console.error("Audio send failed, queueing:", err);
+                }
+            }
+            pendingAudioQueue.push({ mime, data: base64Data });
+            if (pendingAudioQueue.length > MAX_PENDING_AUDIO) pendingAudioQueue.shift();
+        }
+
+        function flushPendingAudio() {
+            if (!pendingAudioQueue.length || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const queued = pendingAudioQueue;
+            pendingAudioQueue = [];
+            queued.forEach(item => trySendAudioBlob(item.mime, item.data));
+        }
+                async function toggleCall() {
             if (!isCalling) {
                 await startLiveCall();
             } else {
@@ -291,12 +418,14 @@
 
                 ws.onopen = async () => {
                     isCalling = true;
+                    reconnectAttempts = 0;
                     setConnection("ONLINE");
                     document.getElementById("callToggle").classList.add("active");
                     document.getElementById("callToggle").innerText = "🛑";
                     setStatus("लाइव कनेक्शन तैयार // बोलिए Boss...");
                     await initHardwareAudio();
                     startHeartbeat();
+                    flushPendingAudio();
                 };
 
                 ws.onmessage = (event) => {
@@ -304,12 +433,22 @@
                         const msg = JSON.parse(event.data);
                         if (msg.type === "audio_chunk" || msg.type === "audio") {
                             enqueueAudioChunk(msg.data);
+                        } else if (msg.type === "pong") {
+                            clearTimeout(heartbeatTimeout);
+                            const rtt = Date.now() - (msg.ts || lastPingSentAt);
+                            setConnection(rtt > 2000 ? "WEAK SIGNAL" : "ONLINE");
                         } else if (msg.type === "transcript") {
                             setStatus(`Boss: "${msg.text}"`);
                         } else if (msg.type === "reply_text") {
                             setStatus(`Maya: "${msg.text}"`);
                         } else if (msg.type === "image") {
                             showActionImage(msg.url);
+                        } else if (msg.type === "telegram_redirect") {
+                            if (msg.url) {
+                                window.open(msg.url, "_blank");
+                            } else {
+                                setStatus("Boss, Telegram अभी उपलब्ध नहीं है।");
+                            }
                         } else if (msg.type === "task_complete") {
                             setStatus("Maya: background task complete.");
                         }
@@ -318,7 +457,24 @@
                     }
                 };
 
-                ws.onclose = () => { if (!userInitiatedStop) stopLiveCall(); };
+                ws.onclose = () => {
+                    stopHeartbeat();
+                    if (userInitiatedStop) {
+                        stopLiveCall();
+                        return;
+                    }
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        reconnectAttempts++;
+                        const delay = getReconnectDelay(reconnectAttempts);
+                        setConnection("RECONNECTING");
+                        setStatus(`कनेक्शन टूटा, ${Math.round(delay / 1000)}s में जोड़ रही हूँ... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                        setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, delay);
+                    } else {
+                        stopLiveCall();
+                        setStatus("कनेक्शन नहीं बन पाया। दोबारा टैप करें।");
+                    }
+                };
+
                 ws.onerror = () => { setStatus("WebSocket connection error"); };
             } catch (error) {
                 console.error(error);
@@ -327,16 +483,36 @@
         }
 
         function startHeartbeat() {
-            clearInterval(heartbeatInterval);
+            stopHeartbeat();
             heartbeatInterval = setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
-                }
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                lastPingSentAt = Date.now();
+                try {
+                    ws.send(JSON.stringify({ type: "ping", ts: lastPingSentAt }));
+                } catch (_) { return; }
+
+                clearTimeout(heartbeatTimeout);
+                heartbeatTimeout = setTimeout(() => {
+                    setConnection("WEAK SIGNAL");
+                    if (ws) { try { ws.close(); } catch (_) {} }
+                }, 8000);
             }, 15000);
         }
 
+        function stopHeartbeat() {
+            clearInterval(heartbeatInterval);
+            clearTimeout(heartbeatTimeout);
+            heartbeatInterval = null;
+            heartbeatTimeout = null;
+        }
+
         function getSupportedMime() {
-            const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+            const types = [
+                "audio/webm;codecs=opus",
+                "audio/webm",
+                "audio/mp4",
+                "audio/ogg;codecs=opus"
+            ];
             for (let t of types) {
                 if (MediaRecorder.isTypeSupported(t)) return t;
             }
@@ -353,31 +529,25 @@
                 mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
 
                 mediaRecorder.ondataavailable = (event) => {
-                    // 4000 बाइट्स नॉइज़ गेट: कम आवाज़/सन्नाटे वाले पैकेट ड्रॉप होंगे
-                    if (event.data && event.data.size > 4000 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                    // 4000 Bytes Noise Gate: Rejects silent background hum
+                    if (event.data && event.data.size > 4000 && !isMayaSpeaking) {
                         const reader = new FileReader();
                         reader.onloadend = () => {
                             const b64 = reader.result.split(",")[1];
-                            ws.send(JSON.stringify({
-                                type: "audio_blob",
-                                mime: mediaRecorder.mimeType || mimeType || "audio/webm",
-                                data: b64
-                            }));
-                            packetsSent++;
-                            debugBadge.innerHTML = `mic: ACTIVE <br> sent: ${packetsSent}`;
+                            trySendAudioBlob(mediaRecorder.mimeType || mimeType || "audio/webm", b64);
                         };
                         reader.readAsDataURL(event.data);
                     }
                 };
 
-                // Continuous recording slices of 2.5 seconds
+                // Non-destructive 2.5s continuous streaming slices
                 mediaRecorder.start(2500);
                 debugBadge.innerHTML = `mic: ACTIVE <br> sent: 0`;
 
             } catch (err) {
                 console.error("Mic error:", err);
                 debugBadge.innerHTML = `mic: ERROR <br> ${err.message}`;
-                setStatus("माइक चालू नहीं हो सका।");
+                setStatus("माइक चालू नहीं हो सका: " + err.message);
             }
         }
 
@@ -394,7 +564,7 @@
                 isMayaSpeaking = false;
                 orb.className = "quantum-orb";
                 activeAudio = null;
-                // Unmute mic tracks when Maya finishes speaking
+                // Unmute mic hardware track when Maya finishes sentence
                 if (mediaStream) {
                     mediaStream.getAudioTracks().forEach(t => t.enabled = true);
                 }
@@ -405,7 +575,7 @@
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
 
-            // Mute mic input instead of stopping the recorder (avoids Android MediaRecorder crash)
+            // Half-Duplex Acoustic Lock: Mute track without stopping MediaRecorder (Zero Mobile Crash)
             if (mediaStream) {
                 mediaStream.getAudioTracks().forEach(t => t.enabled = false);
             }
@@ -457,7 +627,7 @@
             debugBadge.innerHTML = `mic: OFF <br> sent: 0`;
 
             closeActionCard();
-            clearInterval(heartbeatInterval);
+            stopHeartbeat();
 
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 try { mediaRecorder.stop(); } catch (_) {}
@@ -476,4 +646,4 @@
         }
     </script>
 </body>
-    </html>
+</html>
