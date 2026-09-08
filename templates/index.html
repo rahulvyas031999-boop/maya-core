@@ -222,9 +222,25 @@
             cursor: pointer;
             display: flex; align-items: center; justify-content: center;
         }
+        #debugBadge {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 9999;
+            background: rgba(0,0,0,0.85);
+            color: #0f0;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            line-height: 1.4;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
+    <div id="debugBadge">energy: -- <br> rec: --</div>
+
     <header>
         <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">SOVEREIGN OS</span></div>
         <div class="hud-badge">
@@ -281,26 +297,17 @@
         let silenceTimer = null;
         let animFrameId = null;
 
-        // Manual "stop" flag so the socket close handler can tell the
-        // difference between the user hanging up vs. an unexpected drop,
-        // which is what the auto-reconnect logic below relies on.
         let userInitiatedStop = false;
         let reconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
 
-        // Spoken queries the user recorded while the socket was down (or
-        // whose send failed mid-flight) get held here and flushed the
-        // moment the connection comes back - so a network blip never
-        // silently eats something Boss just said.
         let pendingAudioQueue = [];
         const MAX_PENDING_AUDIO = 5;
 
-        // Heartbeat / RTT tracking
         let heartbeatInterval = null;
         let heartbeatTimeout = null;
         let lastPingSentAt = 0;
 
-        // Sequential playback queue for streamed TTS sentence chunks
         let audioQueue = [];
         let isPlayingQueue = false;
 
@@ -312,12 +319,8 @@
         const connectionState = document.getElementById("connectionState");
         const telegramFallback = document.getElementById("telegramFallback");
         const telegramLinkBtn = document.getElementById("telegramLinkBtn");
+        const debugBadge = document.getElementById("debugBadge");
 
-        // Genuine low-bandwidth escape hatch: if the live call's network
-        // stays weak/reconnecting for a while, offer Telegram text mode
-        // (already-working infra, uses a fraction of the data). Fetched
-        // once from the backend so the link always matches whichever bot
-        // token is actually configured - never hardcoded.
         let telegramLink = null;
         let weakNetworkTimer = null;
         let fallbackDismissedThisSpell = false;
@@ -377,11 +380,8 @@
             }
         }
 
-        // Sync the dot color with the initial OFFLINE label at page load.
         setConnection("OFFLINE");
 
-        // 1s, 2s, 4s, 8s, 15s(cap) - real backoff instead of hammering a
-        // network that's still down every 1.5s.
         function getReconnectDelay(attempt) {
             return Math.min(1000 * Math.pow(2, attempt), 15000);
         }
@@ -394,9 +394,6 @@
                 try {
                     ws.send(JSON.stringify({ type: "ping", ts: lastPingSentAt }));
                 } catch (_) { return; }
-                // If no pong comes back, the socket is "half-dead" (looks
-                // connected, isn't) - close it so reconnect logic takes over
-                // instead of Maya silently never responding again.
                 clearTimeout(heartbeatTimeout);
                 heartbeatTimeout = setTimeout(() => {
                     setConnection("WEAK SIGNAL");
@@ -421,8 +418,6 @@
                     console.error("Audio send failed, queueing for retry:", err);
                 }
             }
-            // Socket isn't ready - don't drop what Boss just said, hold it
-            // and flush once the connection is back up.
             pendingAudioQueue.push({ mime, data: base64Data });
             if (pendingAudioQueue.length > MAX_PENDING_AUDIO) pendingAudioQueue.shift();
         }
@@ -463,11 +458,9 @@
                         if (msg.type === "audio_chunk") {
                             enqueueAudioChunk(msg.data);
                         } else if (msg.type === "audio") {
-                            // Backward-compatible single-blob path
                             enqueueAudioChunk(msg.data);
                         } else if (msg.type === "audio_end") {
-                            // No-op: the playback queue drains itself as
-                            // chunks arrive and finish playing.
+                            // No-op
                         } else if (msg.type === "pong") {
                             clearTimeout(heartbeatTimeout);
                             const rtt = Date.now() - (msg.ts || lastPingSentAt);
@@ -498,11 +491,6 @@
                         stopLiveCall();
                         return;
                     }
-                    // Unexpected drop (network blip, server restart) - try to
-                    // reconnect a few times before giving up fully, instead
-                    // of just going silently offline. Exponential backoff
-                    // (1s, 2s, 4s, 8s, 15s cap) avoids hammering a network
-                    // that's still down, and gives it real time to recover.
                     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         reconnectAttempts++;
                         const delay = getReconnectDelay(reconnectAttempts);
@@ -534,28 +522,31 @@
             return "";
         }
 
-        /* 
-           PROFESSIONAL VOICE GATEWAY:
-           Zero periodic chopping. Records ONLY during active speech.
-        */
         async function initHardwareAudio() {
             try {
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
                 });
 
+                debugBadge.innerHTML = "mic: OK <br> energy: --";
+
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// Some mobile browsers (esp. iOS Safari / in-app webviews)
+                // create the AudioContext in a "suspended" state until a
+                // user gesture explicitly resumes it. If that resume never
+                // happens, analyser.getByteFrequencyData() silently returns
+                // all-zero data forever - mic looks connected, VAD never
+                // fires, and there's no error anywhere. Force-resume here.
+                if (audioCtx.state === "suspended") {
+                    audioCtx.resume().catch(() => {});
+                }
+
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 512;
                 micSource = audioCtx.createMediaStreamSource(mediaStream);
                 micSource.connect(analyser);
 
                 const mimeType = getRecorderMimeType();
-                // 24kbps opus is plenty clear for voice and cuts upload
-                // payload size by ~60-70% vs default bitrate - the single
-                // biggest win on a slow uplink. Browsers that ignore the
-                // hint just fall back to their own default, so this is safe
-                // everywhere.
                 mediaRecorder = mimeType
                     ? new MediaRecorder(mediaStream, { mimeType, audioBitsPerSecond: 24000 })
                     : new MediaRecorder(mediaStream);
@@ -567,18 +558,11 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    // Note: no longer requiring ws.readyState === OPEN here -
-                    // trySendAudioBlob() queues the recording for retry if
-                    // the socket happens to be down at this exact moment, so
-                    // a mid-drop network blip doesn't just erase what Boss said.
                     if (audioChunks.length && !isMayaSpeaking) {
                         const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
                         const blob = new Blob(audioChunks, { type: actualMime });
                         audioChunks = [];
 
-                        // Noise Gate: real voiced sentences reliably exceed ~7KB;
-                        // shorter blobs are almost always mic pops / room noise
-                        // rather than actual speech (matches blueprint spec).
                         if (blob.size > 7000) {
                             const reader = new FileReader();
                             reader.onloadend = () => {
@@ -594,18 +578,11 @@
                 const bufferLength = analyser.frequencyBinCount;
                 const dataArray = new Uint8Array(bufferLength);
 
-                // Restrict energy averaging to the human speech band
-                // (~300Hz-3400Hz) instead of the full spectrum. Averaging
-                // across all 256 bins (up to ~24kHz on most devices) dilutes
-                // real speech energy with a huge range of near-silent high
-                // frequencies, so avgEnergy almost never crossed the
-                // threshold except when shouting directly into the mic.
                 const sampleRate = audioCtx.sampleRate || 48000;
                 const binHz = sampleRate / analyser.fftSize;
                 const voiceBinStart = Math.max(1, Math.floor(300 / binHz));
                 const voiceBinEnd = Math.min(bufferLength - 1, Math.ceil(3400 / binHz));
 
-                // Pure In-Memory Speech Activity Detection (VAD)
                 function monitorVoiceActivity() {
                     if (!isCalling) return;
 
@@ -616,7 +593,14 @@
                     }
                     let avgEnergy = sum / (voiceBinEnd - voiceBinStart + 1);
 
-                    // Voiced threshold (Ignores silence and room noise)
+                    // DEBUG: live readout so we can see on-screen (no
+                    // console on mobile) whether mic energy is actually
+                    // reaching this function at all.
+                    debugBadge.innerHTML =
+                        "energy: " + Math.round(avgEnergy) +
+                        " <br> ctx: " + audioCtx.state +
+                        " <br> rec: " + (mediaRecorder ? mediaRecorder.state : "--");
+
                     if (avgEnergy > 12 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
@@ -628,7 +612,6 @@
                         }
                         clearTimeout(silenceTimer);
                     } else if (isUserSpeaking) {
-                        // Natural Speech Pause: 650ms of silence marks end of sentence
                         clearTimeout(silenceTimer);
                         silenceTimer = setTimeout(() => {
                             if (isUserSpeaking) {
@@ -648,20 +631,11 @@
 
             } catch (error) {
                 console.error("Mic error:", error);
+                debugBadge.innerHTML = "mic ERROR: " + error.name;
                 setStatus("माइक्रोफ़ोन permission नहीं मिला।");
             }
         }
 
-        /*
-           SENTENCE-CHUNK PLAYBACK QUEUE:
-           The backend now streams TTS as one small audio clip per
-           sentence instead of one giant clip for the whole reply, so
-           Maya can start speaking as soon as sentence 1 is ready
-           instead of waiting for the entire response to synthesize
-           and download. This queue plays each chunk back-to-back in
-           order, so from the user's perspective it sounds like one
-           continuous reply.
-        */
         function enqueueAudioChunk(base64Audio) {
             audioQueue.push(base64Audio);
             if (!isPlayingQueue) playNextInQueue();
@@ -753,3 +727,5 @@
     </script>
 </body>
 </html>
+
+                
