@@ -1,14 +1,19 @@
 import sqlite3
 import json
 import time
+import os
 from typing import List, Dict, Any, Optional
 
-DB_FILE = "maya_jobs.db"
+DB_FILE = os.getenv("DB_PATH", "maya_jobs.db")
+
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
+
+    # Improves concurrent read/write safety under async FastAPI workers
+    cursor.execute("PRAGMA journal_mode=WAL;")
+
     # 1. Persistent Autonomous Tasks Queue
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
@@ -21,7 +26,7 @@ def init_db():
             updated_at REAL
         )
     """)
-    
+
     # 2. Permanent Long-Term Memory (User Directives, Configs & Knowledge)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_memory (
@@ -31,11 +36,13 @@ def init_db():
             updated_at REAL
         )
     """)
-    
+
     conn.commit()
     conn.close()
 
+
 init_db()
+
 
 # --- Task Queue Engine ---
 def create_task(task_id: str, prompt: str):
@@ -48,6 +55,7 @@ def create_task(task_id: str, prompt: str):
     """, (task_id, prompt, now, now))
     conn.commit()
     conn.close()
+
 
 def append_modification(task_id: str, mod_text: str) -> bool:
     conn = sqlite3.connect(DB_FILE)
@@ -66,25 +74,30 @@ def append_modification(task_id: str, mod_text: str) -> bool:
     conn.close()
     return True
 
+
 def get_latest_active_task_id() -> Optional[str]:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT task_id FROM tasks 
-        WHERE status IN ('pending', 'processing') 
+        SELECT task_id FROM tasks
+        WHERE status IN ('pending', 'processing')
         ORDER BY created_at DESC LIMIT 1
     """)
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
 
+
 def get_task(task_id: str) -> Optional[Dict[str, Any]]:
+    # FIX: params tuple was previously embedded inside the SQL string itself,
+    # which produced a malformed query and raised sqlite3.OperationalError
+    # every time this function was called.
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT task_id, prompt, status, modifications, result 
-        FROM tasks WHERE task_id = ?", (task_id,)
-    """)
+        SELECT task_id, prompt, status, modifications, result
+        FROM tasks WHERE task_id = ?
+    """, (task_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -97,6 +110,7 @@ def get_task(task_id: str) -> Optional[Dict[str, Any]]:
         "result": row[4]
     }
 
+
 def update_task_status(task_id: str, status: str, result: str = ""):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -106,28 +120,31 @@ def update_task_status(task_id: str, status: str, result: str = ""):
     conn.commit()
     conn.close()
 
+
 def get_active_tasks_summary() -> List[Dict[str, Any]]:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT task_id, prompt, status FROM tasks 
-        WHERE status IN ('pending', 'processing') 
+        SELECT task_id, prompt, status FROM tasks
+        WHERE status IN ('pending', 'processing')
         ORDER BY created_at ASC
     """)
     rows = cursor.fetchall()
     conn.close()
     return [{"task_id": r[0], "prompt": r[1], "status": r[2]} for r in rows]
 
+
 def get_unprocessed_tasks() -> List[Dict[str, Any]]:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT task_id, prompt FROM tasks 
+        SELECT task_id, prompt FROM tasks
         WHERE status IN ('pending', 'processing')
     """)
     rows = cursor.fetchall()
     conn.close()
     return [{"task_id": r[0], "prompt": r[1]} for r in rows]
+
 
 # --- Long-Term Memory Engine ---
 def remember_fact(key: str, value: Any, category: str = "general"):
@@ -141,6 +158,7 @@ def remember_fact(key: str, value: Any, category: str = "general"):
     """, (key, val_str, category, time.time()))
     conn.commit()
     conn.close()
+
 
 def recall_memory(category: Optional[str] = None) -> Dict[str, Any]:
     """Maya के सोचने और निर्णय लेने के लिए सेव की गई मेमोरी लोड करें"""
@@ -160,6 +178,7 @@ def recall_memory(category: Optional[str] = None) -> Dict[str, Any]:
             memories[k] = v
     return memories
 
+
 # Auto-register hardware-verified models into permanent memory on boot
 def lock_verified_models_to_memory():
     verified_stack = {
@@ -170,5 +189,6 @@ def lock_verified_models_to_memory():
         "status": "production_verified"
     }
     remember_fact("active_model_registry", verified_stack, category="system_config")
+
 
 lock_verified_models_to_memory()
