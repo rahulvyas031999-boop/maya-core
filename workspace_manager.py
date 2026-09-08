@@ -1,19 +1,28 @@
 import os
-import mimetypes
 from typing import List, Dict, Any
 
-WORKSPACE_DIR = os.path.abspath("workspace")
+WORKSPACE_DIR = os.path.abspath(os.getenv("WORKSPACE_PATH", "workspace"))
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
+
 
 def get_workspace_path(relative_path: str) -> str:
     """Path traversal attack rokne ke liye sanitized safe path"""
     clean_path = os.path.normpath(os.path.join(WORKSPACE_DIR, relative_path.lstrip("/\\")))
-    if not clean_path.startswith(WORKSPACE_DIR):
+
+    # FIX: previously used `clean_path.startswith(WORKSPACE_DIR)`, which is a
+    # naive string-prefix check. A sibling directory such as
+    # "/app/workspace_secrets" would incorrectly pass this check because it
+    # shares the same string prefix as "/app/workspace". We now also require
+    # an exact match OR that the path continues with the OS separator, which
+    # guarantees the resolved path is actually *inside* the workspace folder.
+    if not (clean_path == WORKSPACE_DIR or clean_path.startswith(WORKSPACE_DIR + os.sep)):
         raise ValueError("Access Denied: Path is outside workspace.")
+
     return clean_path
 
+
 def list_artifacts() -> List[Dict[str, Any]]:
-    """Workspace ke andar banni sabhi files ki list"""
+    """Workspace ke andar bani sabhi files ki list"""
     files_list = []
     for root, _, files in os.walk(WORKSPACE_DIR):
         for f in files:
@@ -26,6 +35,7 @@ def list_artifacts() -> List[Dict[str, Any]]:
                 "size_kb": size_kb
             })
     return files_list
+
 
 def save_artifact(relative_path: str, content: str) -> str:
     """File ko safe directory me write karta hai"""
