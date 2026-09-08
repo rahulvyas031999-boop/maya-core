@@ -1,85 +1,530 @@
-/* ==========================================================
-   MICROPHONE (Synchronized & Crash-Proof)
-   ========================================================== */
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MAYA // SOVEREIGN OS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --cyan: #00f3ff;
+            --purple: #9d4edd;
+            --red: #ff0055;
+            --dark: #030612;
+            --glass: rgba(6, 12, 28, 0.90);
+            --border: rgba(0, 243, 255, 0.25);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            background: radial-gradient(circle at center, #0a1128 0%, var(--dark) 100%);
+            color: #d1e8ff;
+            font-family: 'Rajdhani', sans-serif;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            overflow: hidden;
+        }
+        header {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 14px;
+            background: var(--glass);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+        .hud-title {
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 900;
+            font-size: 0.95rem;
+            letter-spacing: 2px;
+            color: #fff;
+            text-shadow: 0 0 10px var(--cyan);
+        }
+        .hud-badge {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.65rem;
+            padding: 3px 6px;
+            border-radius: 6px;
+            background: rgba(0, 243, 255, 0.1);
+            border: 1px solid var(--cyan);
+            color: var(--cyan);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .hud-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--cyan);
+            box-shadow: 0 0 8px var(--cyan);
+        }
+        #mainStage {
+            flex: 1;
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        #coreContainer {
+            position: relative;
+            width: 180px;
+            height: 180px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ring { position: absolute; border-radius: 50%; pointer-events: none; }
+        .ring-1 {
+            width: 170px; height: 170px;
+            border-top: 2px solid var(--cyan);
+            border-bottom: 2px solid var(--purple);
+            animation: spinCW 12s linear infinite;
+        }
+        .ring-2 {
+            width: 140px; height: 140px;
+            border-left: 2px solid var(--cyan);
+            animation: spinCCW 8s linear infinite;
+        }
+        .quantum-orb {
+            width: 90px;
+            height: 90px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%);
+            box-shadow: 0 0 35px var(--cyan), inset 0 0 15px #fff;
+            transition: transform 0.15s ease;
+        }
+        .quantum-orb.speaking {
+            animation: voicePulse 0.9s infinite alternate ease-in-out;
+            box-shadow: 0 0 60px var(--cyan), 0 0 90px var(--purple);
+        }
+        .quantum-orb.listening {
+            transform: scale(1.15);
+            box-shadow: 0 0 60px #00ffcc;
+        }
+        @keyframes spinCW { 100% { transform: rotate(360deg); } }
+        @keyframes spinCCW { 100% { transform: rotate(-360deg); } }
+        @keyframes voicePulse {
+            from { transform: scale(1); filter: brightness(1); }
+            to { transform: scale(1.2); filter: brightness(1.3); }
+        }
+        #actionCard {
+            position: absolute;
+            z-index: 15;
+            width: 90%;
+            background: var(--glass);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 8px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        #actionCard img {
+            width: 100%;
+            border-radius: 8px;
+            max-height: 200px;
+            object-fit: cover;
+        }
+        .action-btns { display: flex; gap: 8px; width: 100%; }
+        .holo-btn {
+            flex: 1;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.65rem;
+            background: rgba(0, 243, 255, 0.15);
+            color: var(--cyan);
+            padding: 6px;
+            border-radius: 6px;
+            text-align: center;
+            text-decoration: none;
+            border: 1px solid var(--cyan);
+            cursor: pointer;
+        }
+        .close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
+        #controls {
+            width: 100%;
+            max-width: 480px;
+            background: var(--glass);
+            padding: 10px 14px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        #statusLabel {
+            font-size: 0.88rem;
+            color: #d1e8ff;
+            font-weight: 600;
+            text-align: center;
+            width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .btn-row { display: flex; align-items: center; gap: 16px; }
+        .round-btn {
+            width: 58px; height: 58px;
+            border-radius: 50%;
+            border: 2px solid #00ffcc;
+            background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
+            color: #030611;
+            font-size: 1.5rem;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .round-btn.active {
+            background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
+            border-color: var(--red);
+        }
+        .stop-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            border: 1px solid var(--red);
+            background: rgba(255, 0, 85, 0.2);
+            color: var(--red);
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">SOVEREIGN OS</span></div>
+        <div class="hud-badge">
+            <div class="hud-dot"></div>
+            <span id="connectionState">OFFLINE</span>
+        </div>
+    </header>
 
-async function initHardwareAudio() {
-    try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            }
-        });
+    <div id="mainStage">
+        <div id="coreContainer">
+            <div class="ring ring-1"></div>
+            <div class="ring ring-2"></div>
+            <div id="orb" class="quantum-orb"></div>
+        </div>
 
-        const mimeType = getRecorderMimeType();
-        mediaRecorder = mimeType 
-            ? new MediaRecorder(mediaStream, { mimeType }) 
-            : new MediaRecorder(mediaStream);
+        <div id="actionCard">
+            <img id="cardImage" src="" alt="Projection" />
+            <div class="action-btns">
+                <a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD</a>
+                <button onclick="closeActionCard()" class="holo-btn close-btn">❌ HATAO</button>
+            </div>
+        </div>
+    </div>
 
-        audioChunks = [];
+    <div id="controls">
+        <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
+        <div class="btn-row">
+            <button id="callToggle" class="round-btn" onclick="toggleCall()">📞</button>
+            <button class="stop-btn" onclick="interruptPlayback()" title="रोकें">⏹</button>
+        </div>
+    </div>
 
-        mediaRecorder.onstart = () => {
-            if (!isMayaSpeaking) {
-                orb.className = "quantum-orb listening";
-            }
-        };
+    <script>
+        let ws = null;
+        let isCalling = false;
+        let isMayaSpeaking = false;
+        let activeAudio = null;
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        
+        let audioCtx = null;
+        let analyser = null;
+        let micSource = null;
+        let isUserSpeaking = false;
+        let silenceTimer = null;
+        let animFrameId = null;
 
-        mediaRecorder.ondataavailable = event => {
-            if (event.data && event.data.size > 0) {
-                audioChunks.push(event.data);
-            }
-        };
+        // Manual "stop" flag so the socket close handler can tell the
+        // difference between the user hanging up vs. an unexpected drop,
+        // which is what the auto-reconnect logic below relies on.
+        let userInitiatedStop = false;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
 
-        mediaRecorder.onstop = async () => {
-            if (audioChunks.length && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
-                const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
-                const blob = new Blob(audioChunks, { type: actualMime });
-                audioChunks = [];
+        const orb = document.getElementById("orb");
+        const statusLabel = document.getElementById("statusLabel");
+        const actionCard = document.getElementById("actionCard");
+        const cardImage = document.getElementById("cardImage");
+        const downloadBtn = document.getElementById("downloadBtn");
+        const connectionState = document.getElementById("connectionState");
 
-                // 4KB Noise Threshold
-                if (blob.size > 4000) {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            const base64 = reader.result.split(",")[1];
-                            ws.send(JSON.stringify({
-                                type: "audio_blob",
-                                mime: actualMime,
-                                data: base64
-                            }));
-                        }
-                    };
-                    reader.readAsDataURL(blob);
-                }
-            } else {
-                audioChunks = [];
-            }
+        function setStatus(text) { statusLabel.innerText = text; }
+        function setConnection(text) { connectionState.innerText = text; }
 
-            // Hardware Guard: 80ms safe delay to prevent mobile AudioContext crash
-            setTimeout(() => {
-                if (isCalling && !isMayaSpeaking && mediaRecorder && mediaRecorder.state === "inactive") {
+        async function toggleCall() {
+            if (!isCalling) await startLiveCall();
+            else stopLiveCall();
+        }
+
+        async function startLiveCall() {
+            try {
+                userInitiatedStop = false;
+                const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
+
+                ws.onopen = async () => {
+                    isCalling = true;
+                    reconnectAttempts = 0;
+                    setConnection("ONLINE");
+                    document.getElementById("callToggle").classList.add("active");
+                    document.getElementById("callToggle").innerText = "🛑";
+                    setStatus("लाइव कनेक्शन तैयार // बोलिए Boss...");
+                    if (!mediaStream) await initHardwareAudio();
+                };
+
+                ws.onmessage = async (event) => {
                     try {
-                        mediaRecorder.start();
-                    } catch (err) {
-                        console.warn("[MIC RESTART SAFE RETRY]", err);
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === "audio") {
+                            playSingleAudio(msg.data);
+                        } else if (msg.type === "transcript") {
+                            setStatus(`Boss: "${msg.text}"`);
+                        } else if (msg.type === "reply_text") {
+                            setStatus(`Maya: "${msg.text}"`);
+                        } else if (msg.type === "image") {
+                            showActionImage(msg.url);
+                        } else if (msg.type === "task_complete") {
+                            setStatus("Maya: background task complete.");
+                        }
+                    } catch (error) {
+                        console.error("Message parse error:", error);
                     }
-                }
-            }, 80);
-        };
+                };
 
-        mediaRecorder.start();
-
-        // Stable 3.0s Cadence (Natural Hindi Speech Window)
-        if (chunkTimer) clearInterval(chunkTimer);
-        chunkTimer = setInterval(() => {
-            if (isCalling && !isMayaSpeaking && mediaRecorder && mediaRecorder.state === "recording") {
-                mediaRecorder.stop();
+                ws.onclose = () => {
+                    if (userInitiatedStop) {
+                        stopLiveCall();
+                        return;
+                    }
+                    // Unexpected drop (network blip, server restart) - try to
+                    // reconnect a few times before giving up fully, instead
+                    // of just going silently offline.
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        reconnectAttempts++;
+                        setConnection("RECONNECTING");
+                        setStatus(`कनेक्शन टूटा, दोबारा जोड़ रही हूँ... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                        setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, 1500);
+                    } else {
+                        stopLiveCall();
+                        setStatus("कनेक्शन नहीं बन पाया। दोबारा टैप करें।");
+                    }
+                };
+                ws.onerror = () => { setStatus("WebSocket connection error"); };
+            } catch (error) {
+                console.error(error);
+                stopLiveCall();
             }
-        }, 3000);
+        }
 
-    } catch (error) {
-        console.error("Mic error:", error);
-        setStatus("माइक्रोफ़ोन permission नहीं मिला।");
-    }
-}
+        function getRecorderMimeType() {
+            const candidates = [
+                "audio/webm;codecs=opus",
+                "audio/webm",
+                "audio/ogg;codecs=opus",
+                "audio/mp4"
+            ];
+            for (const type of candidates) {
+                if (MediaRecorder.isTypeSupported(type)) return type;
+            }
+            return "";
+        }
+
+        /* 
+           PROFESSIONAL VOICE GATEWAY:
+           Zero periodic chopping. Records ONLY during active speech.
+        */
+        async function initHardwareAudio() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 512;
+                micSource = audioCtx.createMediaStreamSource(mediaStream);
+                micSource.connect(analyser);
+
+                const mimeType = getRecorderMimeType();
+                mediaRecorder = mimeType 
+                    ? new MediaRecorder(mediaStream, { mimeType }) 
+                    : new MediaRecorder(mediaStream);
+
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    if (audioChunks.length && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                        const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
+                        const blob = new Blob(audioChunks, { type: actualMime });
+                        audioChunks = [];
+
+                        // Noise Gate: real voiced sentences reliably exceed ~7KB;
+                        // shorter blobs are almost always mic pops / room noise
+                        // rather than actual speech (matches blueprint spec).
+                        if (blob.size > 7000) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                if (ws && ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({
+                                        type: "audio_blob",
+                                        mime: actualMime,
+                                        data: reader.result.split(",")[1]
+                                    }));
+                                }
+                            };
+                            reader.readAsDataURL(blob);
+                        }
+                    } else {
+                        audioChunks = [];
+                    }
+                };
+
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+
+                // Pure In-Memory Speech Activity Detection (VAD)
+                function monitorVoiceActivity() {
+                    if (!isCalling) return;
+
+                    analyser.getByteFrequencyData(dataArray);
+                    let sum = 0;
+                    for (let i = 0; i < bufferLength; i++) {
+                        sum += dataArray[i];
+                    }
+                    let avgEnergy = sum / bufferLength;
+
+                    // Voiced threshold (Ignores silence and room noise)
+                    if (avgEnergy > 20 && !isMayaSpeaking) {
+                        if (!isUserSpeaking) {
+                            isUserSpeaking = true;
+                            orb.className = "quantum-orb listening";
+                            audioChunks = [];
+                            if (mediaRecorder.state === "inactive") {
+                                mediaRecorder.start();
+                            }
+                        }
+                        clearTimeout(silenceTimer);
+                    } else if (isUserSpeaking) {
+                        // Natural Speech Pause: 650ms of silence marks end of sentence
+                        clearTimeout(silenceTimer);
+                        silenceTimer = setTimeout(() => {
+                            if (isUserSpeaking) {
+                                isUserSpeaking = false;
+                                orb.className = "quantum-orb";
+                                if (mediaRecorder.state === "recording") {
+                                    mediaRecorder.stop();
+                                }
+                            }
+                        }, 650);
+                    }
+
+                    animFrameId = requestAnimationFrame(monitorVoiceActivity);
+                }
+
+                monitorVoiceActivity();
+
+            } catch (error) {
+                console.error("Mic error:", error);
+                setStatus("माइक्रोफ़ोन permission नहीं मिला।");
+            }
+        }
+
+        function playSingleAudio(base64Audio) {
+            interruptPlayback();
+            isMayaSpeaking = true;
+            orb.className = "quantum-orb speaking";
+
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                try { mediaRecorder.stop(); } catch (_) {}
+            }
+
+            activeAudio = new Audio("data:audio/mp3;base64," + base64Audio);
+
+            const resumeMic = () => {
+                isMayaSpeaking = false;
+                orb.className = "quantum-orb";
+                activeAudio = null;
+            };
+
+            activeAudio.onended = resumeMic;
+            activeAudio.onerror = resumeMic;
+            activeAudio.play().catch(resumeMic);
+        }
+
+        function interruptPlayback() {
+            if (activeAudio) {
+                activeAudio.pause();
+                activeAudio.currentTime = 0;
+                activeAudio = null;
+            }
+            isMayaSpeaking = false;
+            orb.className = "quantum-orb";
+        }
+
+        function showActionImage(url) {
+            actionCard.style.display = "flex";
+            cardImage.src = url;
+            downloadBtn.href = url;
+        }
+
+        function closeActionCard() {
+            actionCard.style.display = "none";
+            cardImage.src = "";
+            downloadBtn.href = "";
+        }
+
+        function stopLiveCall() {
+            userInitiatedStop = true;
+            interruptPlayback();
+            isCalling = false;
+            reconnectAttempts = 0;
+            setConnection("OFFLINE");
+            document.getElementById("callToggle").classList.remove("active");
+            document.getElementById("callToggle").innerText = "📞";
+            setStatus("कॉल समाप्त // पुनः बात करने के लिए टैप करें");
+            orb.className = "quantum-orb";
+
+            closeActionCard();
+
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            clearTimeout(silenceTimer);
+
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                try { mediaRecorder.stop(); } catch (_) {}
+            }
+            mediaRecorder = null;
+
+            if (audioCtx) {
+                try { audioCtx.close(); } catch (_) {}
+                audioCtx = null;
+            }
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            ws = null;
+        }
+    </script>
+</body>
+</html>
