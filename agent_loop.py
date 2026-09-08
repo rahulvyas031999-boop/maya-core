@@ -26,8 +26,18 @@ PROTOCOL:
 4. FINISH: Deliver crisp executive summary once verified.
 """
 
+
+class MockMessage:
+    """Used to normalize the Gemini fallback response into the same shape
+    as a Groq ChatCompletionMessage, so run_react_agent can treat both
+    providers identically."""
+    def __init__(self, content, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
 async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
-    # 1. Primary: Verified Groq openai/gpt-oss-20b
+    # 1. Primary: Verified Groq openai/gpt-oss-20b (full tool-calling support)
     if groq_client:
         try:
             loop = asyncio.get_running_loop()
@@ -45,22 +55,35 @@ async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
         except Exception as e:
             print(f"[REACT GROQ WARNING]: {e}. Switching to Gemini {FALLBACK_GEMINI_MODEL}...")
 
-    # 2. Hard Fallback: Verified Google Gemini 3.6 Flash
+    # 2. Hard Fallback: Google Gemini 3.6 Flash
+    # NOTE: This fallback path does NOT execute tools. It is a text-only
+    # safety net so the Boss still gets a coherent answer if Groq is down,
+    # rather than a silent crash - but multi-step tasks that genuinely
+    # require tool use (search/file/code) will not be completed by this
+    # path. We tell the model that explicitly so it doesn't pretend to have
+    # used a tool it doesn't have.
     if gemini_client:
         try:
             prompt_text = "\n".join([f"{m['role']}: {m.get('content', '')}" for m in messages])
-            res = gemini_client.models.generate_content(
-                model=FALLBACK_GEMINI_MODEL,
-                contents=prompt_text
+            prompt_text += (
+                "\n\n[SYSTEM NOTE: You are running in fallback mode with NO tool access. "
+                "Do not claim to have searched, written files, or executed code. "
+                "Answer directly in Hindi/Hinglish with female grammar, and if the task "
+                "genuinely requires a tool, tell the Boss it needs to be retried once the "
+                "primary engine is back online.]"
             )
-            class MockMessage:
-                content = res.text
-                tool_calls = None
-            return MockMessage()
+            res = await asyncio.to_thread(
+                lambda: gemini_client.models.generate_content(
+                    model=FALLBACK_GEMINI_MODEL,
+                    contents=prompt_text
+                )
+            )
+            return MockMessage(content=res.text, tool_calls=None)
         except Exception as ge:
             print(f"[REACT GEMINI FALLBACK ERROR]: {ge}")
 
     return None
+
 
 async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
     messages: List[Dict[str, Any]] = [
@@ -78,7 +101,7 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
         tool_calls = getattr(msg, "tool_calls", None)
 
         if not tool_calls:
-            final_ans = getattr(msg, "content", "Task completed.")
+            final_ans = getattr(msg, "content", None) or "Task completed."
             print(f"[REACT ENGINE] Finished at turn {turn + 1}")
             return final_ans
 
@@ -108,4 +131,12 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
                 "content": str(observation)
             })
 
-    return "Task completed. Workspace files updated."
+    # FIX: previously returned "Task completed. Workspace files updated."
+    # here unconditionally, even though reaching this point means the loop
+    # was cut off by max_turns WITHOUT the model ever giving a final
+    # (non-tool-call) answer. That was a misleading success message for an
+    # incomplete task. Report it honestly instead.
+    return (
+        "Boss, task ज़्यादा complex निकला और तय turns में पूरा नहीं हो पाया। "
+        "कृपया task को छोटे हिस्सों में तोड़कर दोबारा भेजें।"
+    )
