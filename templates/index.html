@@ -207,6 +207,7 @@
             cursor: pointer;
             box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
             display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s ease;
         }
         .round-btn.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
@@ -430,11 +431,23 @@
         }
 
         async function toggleCall() {
-            if (!isCalling) await startLiveCall();
-            else stopLiveCall();
+            if (!isCalling) {
+                try {
+                    if (!audioCtx) {
+                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (audioCtx.state === 'suspended') {
+                        await audioCtx.resume();
+                    }
+                } catch (e) {
+                    console.warn("AudioContext unlock issue:", e);
+                }
+                await startLiveCall();
+            } else {
+                stopLiveCall();
+            }
         }
-
-        async function startLiveCall() {
+                async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -455,12 +468,10 @@
                 ws.onmessage = async (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        if (msg.type === "audio_chunk") {
-                            enqueueAudioChunk(msg.data);
-                        } else if (msg.type === "audio") {
+                        if (msg.type === "audio_chunk" || msg.type === "audio") {
                             enqueueAudioChunk(msg.data);
                         } else if (msg.type === "audio_end") {
-                            // No-op
+                            // Audio stream finished
                         } else if (msg.type === "pong") {
                             clearTimeout(heartbeatTimeout);
                             const rtt = Date.now() - (msg.ts || lastPingSentAt);
@@ -530,15 +541,11 @@
 
                 debugBadge.innerHTML = "mic: OK <br> energy: --";
 
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-// Some mobile browsers (esp. iOS Safari / in-app webviews)
-                // create the AudioContext in a "suspended" state until a
-                // user gesture explicitly resumes it. If that resume never
-                // happens, analyser.getByteFrequencyData() silently returns
-                // all-zero data forever - mic looks connected, VAD never
-                // fires, and there's no error anywhere. Force-resume here.
-                if (audioCtx.state === "suspended") {
-                    audioCtx.resume().catch(() => {});
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
                 }
 
                 analyser = audioCtx.createAnalyser();
@@ -547,8 +554,8 @@
                 micSource.connect(analyser);
 
                 const mimeType = getRecorderMimeType();
-                mediaRecorder = mimeType
-                    ? new MediaRecorder(mediaStream, { mimeType, audioBitsPerSecond: 24000 })
+                mediaRecorder = mimeType 
+                    ? new MediaRecorder(mediaStream, { mimeType }) 
                     : new MediaRecorder(mediaStream);
 
                 audioChunks = [];
@@ -558,12 +565,12 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    if (audioChunks.length && !isMayaSpeaking) {
+                    if (audioChunks.length && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
                         const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
                         const blob = new Blob(audioChunks, { type: actualMime });
                         audioChunks = [];
 
-                        if (blob.size > 7000) {
+                        if (blob.size > 2000) {
                             const reader = new FileReader();
                             reader.onloadend = () => {
                                 trySendAudioBlob(actualMime, reader.result.split(",")[1]);
@@ -575,39 +582,35 @@
                     }
                 };
 
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Uint8Array(bufferLength);
+                const sampleRate = audioCtx.sampleRate;
+                const binSize = sampleRate / 512;
+                const startBin = Math.floor(300 / binSize);
+                const endBin = Math.min(Math.floor(3400 / binSize), analyser.frequencyBinCount);
 
-                const sampleRate = audioCtx.sampleRate || 48000;
-                const binHz = sampleRate / analyser.fftSize;
-                const voiceBinStart = Math.max(1, Math.floor(300 / binHz));
-                const voiceBinEnd = Math.min(bufferLength - 1, Math.ceil(3400 / binHz));
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
                 function monitorVoiceActivity() {
                     if (!isCalling) return;
 
                     analyser.getByteFrequencyData(dataArray);
-                    let sum = 0;
-                    for (let i = voiceBinStart; i <= voiceBinEnd; i++) {
-                        sum += dataArray[i];
+
+                    let voiceSum = 0;
+                    let count = 0;
+                    for (let i = startBin; i < endBin; i++) {
+                        voiceSum += dataArray[i];
+                        count++;
                     }
-                    let avgEnergy = sum / (voiceBinEnd - voiceBinStart + 1);
+                    let avgVoiceEnergy = count > 0 ? (voiceSum / count) : 0;
 
-                    // DEBUG: live readout so we can see on-screen (no
-                    // console on mobile) whether mic energy is actually
-                    // reaching this function at all.
-                    debugBadge.innerHTML =
-                        "energy: " + Math.round(avgEnergy) +
-                        " <br> ctx: " + audioCtx.state +
-                        " <br> rec: " + (mediaRecorder ? mediaRecorder.state : "--");
+                    debugBadge.innerHTML = `energy: ${avgVoiceEnergy.toFixed(1)} <br> rec: ${mediaRecorder ? mediaRecorder.state : '--'}`;
 
-                    if (avgEnergy > 12 && !isMayaSpeaking) {
+                    if (avgVoiceEnergy > 12 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
                             audioChunks = [];
-                            if (mediaRecorder.state === "inactive") {
-                                mediaRecorder.start();
+                            if (mediaRecorder && mediaRecorder.state === "inactive") {
+                                try { mediaRecorder.start(); } catch(e){}
                             }
                         }
                         clearTimeout(silenceTimer);
@@ -617,8 +620,8 @@
                             if (isUserSpeaking) {
                                 isUserSpeaking = false;
                                 orb.className = "quantum-orb";
-                                if (mediaRecorder.state === "recording") {
-                                    mediaRecorder.stop();
+                                if (mediaRecorder && mediaRecorder.state === "recording") {
+                                    try { mediaRecorder.stop(); } catch(e){}
                                 }
                             }
                         }, 650);
@@ -630,15 +633,17 @@
                 monitorVoiceActivity();
 
             } catch (error) {
-                console.error("Mic error:", error);
-                debugBadge.innerHTML = "mic ERROR: " + error.name;
-                setStatus("माइक्रोफ़ोन permission नहीं मिला।");
+                console.error("Mic initialization error:", error);
+                debugBadge.innerHTML = `mic: ERR <br> ${error.message}`;
+                setStatus("माइक परमिशन या ऑडियो एरर: " + error.message);
             }
         }
 
-        function enqueueAudioChunk(base64Audio) {
-            audioQueue.push(base64Audio);
-            if (!isPlayingQueue) playNextInQueue();
+        function enqueueAudioChunk(base64Data) {
+            audioQueue.push(base64Data);
+            if (!isPlayingQueue) {
+                playNextInQueue();
+            }
         }
 
         function playNextInQueue() {
@@ -646,6 +651,7 @@
                 isPlayingQueue = false;
                 isMayaSpeaking = false;
                 orb.className = "quantum-orb";
+                activeAudio = null;
                 return;
             }
 
@@ -656,12 +662,14 @@
             if (mediaRecorder && mediaRecorder.state === "recording") {
                 try { mediaRecorder.stop(); } catch (_) {}
             }
+            isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
             activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
-            activeAudio.onended = playNextInQueue;
-            activeAudio.onerror = playNextInQueue;
-            activeAudio.play().catch(playNextInQueue);
+
+            activeAudio.onended = () => { playNextInQueue(); };
+            activeAudio.onerror = () => { playNextInQueue(); };
+            activeAudio.play().catch(() => { playNextInQueue(); });
         }
 
         function interruptPlayback() {
@@ -690,11 +698,8 @@
 
         function stopLiveCall() {
             userInitiatedStop = true;
-            stopHeartbeat();
             interruptPlayback();
             isCalling = false;
-            reconnectAttempts = 0;
-            pendingAudioQueue = [];
             setConnection("OFFLINE");
             document.getElementById("callToggle").classList.remove("active");
             document.getElementById("callToggle").innerText = "📞";
@@ -705,6 +710,7 @@
 
             if (animFrameId) cancelAnimationFrame(animFrameId);
             clearTimeout(silenceTimer);
+            stopHeartbeat();
 
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 try { mediaRecorder.stop(); } catch (_) {}
@@ -721,11 +727,11 @@
                 mediaStream = null;
             }
 
-            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
             ws = null;
         }
     </script>
 </body>
 </html>
-
-                
