@@ -149,31 +149,6 @@
             cursor: pointer;
         }
         .close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
-        #telegramFallback {
-            width: 100%;
-            max-width: 480px;
-            background: var(--glass);
-            border: 1px solid rgba(255, 200, 0, 0.4);
-            border-radius: 12px;
-            padding: 10px 14px;
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-        #telegramFallback p {
-            font-size: 0.8rem;
-            color: #ffd166;
-            text-align: center;
-            font-weight: 600;
-        }
-        .fallback-btns { display: flex; gap: 8px; width: 100%; }
-        .telegram-btn {
-            background: rgba(255, 209, 102, 0.15);
-            color: #ffd166;
-            border-color: #ffd166;
-        }
         #controls {
             width: 100%;
             max-width: 480px;
@@ -240,7 +215,7 @@
     </style>
 </head>
 <body>
-    <div id="debugBadge">energy: -- <br> rec: --</div>
+    <div id="debugBadge">mic: OFF <br> sent: 0</div>
 
     <header>
         <div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">SOVEREIGN OS</span></div>
@@ -266,14 +241,6 @@
         </div>
     </div>
 
-    <div id="telegramFallback">
-        <p>⚠️ नेटवर्क कमज़ोर लग रहा है। Telegram पर low-bandwidth mode try करें?</p>
-        <div class="fallback-btns">
-            <a id="telegramLinkBtn" href="#" target="_blank" class="holo-btn telegram-btn">💬 TELEGRAM MODE</a>
-            <button onclick="dismissTelegramFallback()" class="holo-btn close-btn">❌ रहने दो</button>
-        </div>
-    </div>
-
     <div id="controls">
         <div id="statusLabel">कॉल शुरू करने के लिए टैप करें</div>
         <div class="btn-row">
@@ -289,26 +256,10 @@
         let activeAudio = null;
         let mediaStream = null;
         let mediaRecorder = null;
-        let audioChunks = [];
-        
-        let audioCtx = null;
-        let analyser = null;
-        let micSource = null;
-        let isUserSpeaking = false;
-        let silenceTimer = null;
-        let animFrameId = null;
-
+        let packetsSent = 0;
         let userInitiatedStop = false;
-        let reconnectAttempts = 0;
-        const MAX_RECONNECT_ATTEMPTS = 5;
-
-        let pendingAudioQueue = [];
-        const MAX_PENDING_AUDIO = 5;
 
         let heartbeatInterval = null;
-        let heartbeatTimeout = null;
-        let lastPingSentAt = 0;
-
         let audioQueue = [];
         let isPlayingQueue = false;
 
@@ -318,176 +269,47 @@
         const cardImage = document.getElementById("cardImage");
         const downloadBtn = document.getElementById("downloadBtn");
         const connectionState = document.getElementById("connectionState");
-        const telegramFallback = document.getElementById("telegramFallback");
-        const telegramLinkBtn = document.getElementById("telegramLinkBtn");
         const debugBadge = document.getElementById("debugBadge");
 
-        let telegramLink = null;
-        let weakNetworkTimer = null;
-        let fallbackDismissedThisSpell = false;
-        const WEAK_NETWORK_FALLBACK_DELAY = 6000;
-
-        fetch("/telegram-link")
-            .then(r => r.json())
-            .then(data => { telegramLink = data.url; })
-            .catch(() => { telegramLink = null; });
-
-        function maybeShowTelegramFallback() {
-            if (!telegramLink || fallbackDismissedThisSpell) return;
-            telegramLinkBtn.href = telegramLink;
-            telegramFallback.style.display = "flex";
-        }
-
-        function dismissTelegramFallback() {
-            fallbackDismissedThisSpell = true;
-            telegramFallback.style.display = "none";
-        }
-
-        function hideTelegramFallback() {
-            telegramFallback.style.display = "none";
-        }
-
-        const hudDot = document.querySelector(".hud-dot");
-        const CONNECTION_COLORS = {
-            "ONLINE": "#00f3ff",
-            "WEAK SIGNAL": "#ffd166",
-            "RECONNECTING": "#ff9f1c",
-            "OFFLINE": "#5a6472",
-        };
-
         function setStatus(text) { statusLabel.innerText = text; }
-
-        function setConnection(text) {
-            connectionState.innerText = text;
-
-            const color = CONNECTION_COLORS[text] || CONNECTION_COLORS.ONLINE;
-            hudDot.style.background = color;
-            hudDot.style.boxShadow = `0 0 8px ${color}`;
-
-            if (text === "WEAK SIGNAL" || text === "RECONNECTING") {
-                if (!weakNetworkTimer) {
-                    weakNetworkTimer = setTimeout(maybeShowTelegramFallback, WEAK_NETWORK_FALLBACK_DELAY);
-                }
-            } else {
-                clearTimeout(weakNetworkTimer);
-                weakNetworkTimer = null;
-                if (text === "ONLINE") {
-                    fallbackDismissedThisSpell = false;
-                    hideTelegramFallback();
-                }
-                if (text === "OFFLINE") {
-                    hideTelegramFallback();
-                }
-            }
-        }
-
-        setConnection("OFFLINE");
-
-        function getReconnectDelay(attempt) {
-            return Math.min(1000 * Math.pow(2, attempt), 15000);
-        }
-
-        function startHeartbeat() {
-            stopHeartbeat();
-            heartbeatInterval = setInterval(() => {
-                if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                lastPingSentAt = Date.now();
-                try {
-                    ws.send(JSON.stringify({ type: "ping", ts: lastPingSentAt }));
-                } catch (_) { return; }
-                clearTimeout(heartbeatTimeout);
-                heartbeatTimeout = setTimeout(() => {
-                    setConnection("WEAK SIGNAL");
-                    if (ws) { try { ws.close(); } catch (_) {} }
-                }, 8000);
-            }, 15000);
-        }
-
-        function stopHeartbeat() {
-            clearInterval(heartbeatInterval);
-            clearTimeout(heartbeatTimeout);
-            heartbeatInterval = null;
-            heartbeatTimeout = null;
-        }
-
-        function trySendAudioBlob(mime, base64Data) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                try {
-                    ws.send(JSON.stringify({ type: "audio_blob", mime, data: base64Data }));
-                    return;
-                } catch (err) {
-                    console.error("Audio send failed, queueing for retry:", err);
-                }
-            }
-            pendingAudioQueue.push({ mime, data: base64Data });
-            if (pendingAudioQueue.length > MAX_PENDING_AUDIO) pendingAudioQueue.shift();
-        }
-
-        function flushPendingAudio() {
-            if (!pendingAudioQueue.length || !ws || ws.readyState !== WebSocket.OPEN) return;
-            const queued = pendingAudioQueue;
-            pendingAudioQueue = [];
-            queued.forEach(item => trySendAudioBlob(item.mime, item.data));
-        }
+        function setConnection(text) { connectionState.innerText = text; }
 
         async function toggleCall() {
             if (!isCalling) {
-                try {
-                    if (!audioCtx) {
-                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                    }
-                    if (audioCtx.state === 'suspended') {
-                        await audioCtx.resume();
-                    }
-                } catch (e) {
-                    console.warn("AudioContext unlock issue:", e);
-                }
                 await startLiveCall();
             } else {
                 stopLiveCall();
             }
         }
-                async function startLiveCall() {
+
+        async function startLiveCall() {
             try {
                 userInitiatedStop = false;
+                packetsSent = 0;
                 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
                 ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
 
                 ws.onopen = async () => {
                     isCalling = true;
-                    reconnectAttempts = 0;
                     setConnection("ONLINE");
                     document.getElementById("callToggle").classList.add("active");
                     document.getElementById("callToggle").innerText = "🛑";
                     setStatus("लाइव कनेक्शन तैयार // बोलिए Boss...");
-                    if (!mediaStream) await initHardwareAudio();
+                    await initHardwareAudio();
                     startHeartbeat();
-                    flushPendingAudio();
                 };
 
-                ws.onmessage = async (event) => {
+                ws.onmessage = (event) => {
                     try {
                         const msg = JSON.parse(event.data);
                         if (msg.type === "audio_chunk" || msg.type === "audio") {
                             enqueueAudioChunk(msg.data);
-                        } else if (msg.type === "audio_end") {
-                            // Audio stream finished
-                        } else if (msg.type === "pong") {
-                            clearTimeout(heartbeatTimeout);
-                            const rtt = Date.now() - (msg.ts || lastPingSentAt);
-                            setConnection(rtt > 2000 ? "WEAK SIGNAL" : "ONLINE");
                         } else if (msg.type === "transcript") {
                             setStatus(`Boss: "${msg.text}"`);
                         } else if (msg.type === "reply_text") {
                             setStatus(`Maya: "${msg.text}"`);
                         } else if (msg.type === "image") {
                             showActionImage(msg.url);
-                        } else if (msg.type === "telegram_redirect") {
-                            if (msg.url) {
-                                window.open(msg.url, "_blank");
-                            } else {
-                                setStatus("Boss, Telegram अभी उपलब्ध नहीं है।");
-                            }
                         } else if (msg.type === "task_complete") {
                             setStatus("Maya: background task complete.");
                         }
@@ -496,23 +318,7 @@
                     }
                 };
 
-                ws.onclose = () => {
-                    stopHeartbeat();
-                    if (userInitiatedStop) {
-                        stopLiveCall();
-                        return;
-                    }
-                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                        reconnectAttempts++;
-                        const delay = getReconnectDelay(reconnectAttempts);
-                        setConnection("RECONNECTING");
-                        setStatus(`कनेक्शन टूटा, ${Math.round(delay / 1000)}s में दोबारा जोड़ रही हूँ... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-                        setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, delay);
-                    } else {
-                        stopLiveCall();
-                        setStatus("कनेक्शन नहीं बन पाया। दोबारा टैप करें।");
-                    }
-                };
+                ws.onclose = () => { if (!userInitiatedStop) stopLiveCall(); };
                 ws.onerror = () => { setStatus("WebSocket connection error"); };
             } catch (error) {
                 console.error(error);
@@ -520,15 +326,19 @@
             }
         }
 
-        function getRecorderMimeType() {
-            const candidates = [
-                "audio/webm;codecs=opus",
-                "audio/webm",
-                "audio/ogg;codecs=opus",
-                "audio/mp4"
-            ];
-            for (const type of candidates) {
-                if (MediaRecorder.isTypeSupported(type)) return type;
+        function startHeartbeat() {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                }
+            }, 15000);
+        }
+
+        function getSupportedMime() {
+            const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+            for (let t of types) {
+                if (MediaRecorder.isTypeSupported(t)) return t;
             }
             return "";
         }
@@ -539,103 +349,35 @@
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
                 });
 
-                debugBadge.innerHTML = "mic: OK <br> energy: --";
-
-                if (!audioCtx) {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
-
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 512;
-                micSource = audioCtx.createMediaStreamSource(mediaStream);
-                micSource.connect(analyser);
-
-                const mimeType = getRecorderMimeType();
-                mediaRecorder = mimeType 
-                    ? new MediaRecorder(mediaStream, { mimeType }) 
-                    : new MediaRecorder(mediaStream);
-
-                audioChunks = [];
+                const mimeType = getSupportedMime();
+                mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
 
                 mediaRecorder.ondataavailable = (event) => {
-                    if (event.data && event.data.size > 0) audioChunks.push(event.data);
-                };
-
-                mediaRecorder.onstop = () => {
-                    if (audioChunks.length && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
-                        const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
-                        const blob = new Blob(audioChunks, { type: actualMime });
-                        audioChunks = [];
-
-                        if (blob.size > 2000) {
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                                trySendAudioBlob(actualMime, reader.result.split(",")[1]);
-                            };
-                            reader.readAsDataURL(blob);
-                        }
-                    } else {
-                        audioChunks = [];
+                    // 4000 बाइट्स नॉइज़ गेट: कम आवाज़/सन्नाटे वाले पैकेट ड्रॉप होंगे
+                    if (event.data && event.data.size > 4000 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const b64 = reader.result.split(",")[1];
+                            ws.send(JSON.stringify({
+                                type: "audio_blob",
+                                mime: mediaRecorder.mimeType || mimeType || "audio/webm",
+                                data: b64
+                            }));
+                            packetsSent++;
+                            debugBadge.innerHTML = `mic: ACTIVE <br> sent: ${packetsSent}`;
+                        };
+                        reader.readAsDataURL(event.data);
                     }
                 };
 
-                const sampleRate = audioCtx.sampleRate;
-                const binSize = sampleRate / 512;
-                const startBin = Math.floor(300 / binSize);
-                const endBin = Math.min(Math.floor(3400 / binSize), analyser.frequencyBinCount);
+                // Continuous recording slices of 2.5 seconds
+                mediaRecorder.start(2500);
+                debugBadge.innerHTML = `mic: ACTIVE <br> sent: 0`;
 
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-                function monitorVoiceActivity() {
-                    if (!isCalling) return;
-
-                    analyser.getByteFrequencyData(dataArray);
-
-                    let voiceSum = 0;
-                    let count = 0;
-                    for (let i = startBin; i < endBin; i++) {
-                        voiceSum += dataArray[i];
-                        count++;
-                    }
-                    let avgVoiceEnergy = count > 0 ? (voiceSum / count) : 0;
-
-                    debugBadge.innerHTML = `energy: ${avgVoiceEnergy.toFixed(1)} <br> rec: ${mediaRecorder ? mediaRecorder.state : '--'}`;
-
-                    if (avgVoiceEnergy > 12 && !isMayaSpeaking) {
-                        if (!isUserSpeaking) {
-                            isUserSpeaking = true;
-                            orb.className = "quantum-orb listening";
-                            audioChunks = [];
-                            if (mediaRecorder && mediaRecorder.state === "inactive") {
-                                try { mediaRecorder.start(); } catch(e){}
-                            }
-                        }
-                        clearTimeout(silenceTimer);
-                    } else if (isUserSpeaking) {
-                        clearTimeout(silenceTimer);
-                        silenceTimer = setTimeout(() => {
-                            if (isUserSpeaking) {
-                                isUserSpeaking = false;
-                                orb.className = "quantum-orb";
-                                if (mediaRecorder && mediaRecorder.state === "recording") {
-                                    try { mediaRecorder.stop(); } catch(e){}
-                                }
-                            }
-                        }, 650);
-                    }
-
-                    animFrameId = requestAnimationFrame(monitorVoiceActivity);
-                }
-
-                monitorVoiceActivity();
-
-            } catch (error) {
-                console.error("Mic initialization error:", error);
-                debugBadge.innerHTML = `mic: ERR <br> ${error.message}`;
-                setStatus("माइक परमिशन या ऑडियो एरर: " + error.message);
+            } catch (err) {
+                console.error("Mic error:", err);
+                debugBadge.innerHTML = `mic: ERROR <br> ${err.message}`;
+                setStatus("माइक चालू नहीं हो सका।");
             }
         }
 
@@ -652,6 +394,10 @@
                 isMayaSpeaking = false;
                 orb.className = "quantum-orb";
                 activeAudio = null;
+                // Unmute mic tracks when Maya finishes speaking
+                if (mediaStream) {
+                    mediaStream.getAudioTracks().forEach(t => t.enabled = true);
+                }
                 return;
             }
 
@@ -659,10 +405,10 @@
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
 
-            if (mediaRecorder && mediaRecorder.state === "recording") {
-                try { mediaRecorder.stop(); } catch (_) {}
+            // Mute mic input instead of stopping the recorder (avoids Android MediaRecorder crash)
+            if (mediaStream) {
+                mediaStream.getAudioTracks().forEach(t => t.enabled = false);
             }
-            isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
             activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
@@ -682,6 +428,9 @@
             }
             isMayaSpeaking = false;
             orb.className = "quantum-orb";
+            if (mediaStream) {
+                mediaStream.getAudioTracks().forEach(t => t.enabled = true);
+            }
         }
 
         function showActionImage(url) {
@@ -705,25 +454,18 @@
             document.getElementById("callToggle").innerText = "📞";
             setStatus("कॉल समाप्त // पुनः बात करने के लिए टैप करें");
             orb.className = "quantum-orb";
+            debugBadge.innerHTML = `mic: OFF <br> sent: 0`;
 
             closeActionCard();
-
-            if (animFrameId) cancelAnimationFrame(animFrameId);
-            clearTimeout(silenceTimer);
-            stopHeartbeat();
+            clearInterval(heartbeatInterval);
 
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 try { mediaRecorder.stop(); } catch (_) {}
             }
             mediaRecorder = null;
 
-            if (audioCtx) {
-                try { audioCtx.close(); } catch (_) {}
-                audioCtx = null;
-            }
-
             if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
 
@@ -734,4 +476,4 @@
         }
     </script>
 </body>
-</html>
+    </html>
