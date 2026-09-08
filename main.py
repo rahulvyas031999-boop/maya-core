@@ -35,6 +35,8 @@ from task_queue import (
     update_task_status,
     get_active_tasks_summary,
     get_unprocessed_tasks,
+    remember_fact,
+    recall_memory,
 )
 
 from workspace_manager import (
@@ -280,6 +282,24 @@ def extract_clean_json(text: str) -> Dict[str, Any]:
         pass
     return {}
 
+# Blueprint Layer 1 — "Hallucination Shield": Whisper, when fed a clip
+# that is mostly/entirely room silence, tends to hallucinate a small set
+# of stock phrases instead of returning empty text. temperature=0.0 plus
+# the context prompt reduces this but does not guarantee it, so we
+# discard the transcript outright when it consists ONLY of a known
+# phantom phrase (allowing exact match / near-exact match, not a
+# substring check, so a real sentence that happens to contain "thank
+# you" is not wrongly discarded).
+HALLUCINATION_BLACKLIST = {
+    "thank you", "thanks for watching", "subtitles", "subscribe",
+    "झाल", "जय हिंद", "आप सभी को धन्यवाद", "धन्यवाद",
+}
+
+def is_hallucinated_transcript(text: str) -> bool:
+    normalized = text.strip().lower().strip(".,!?।")
+    return normalized in HALLUCINATION_BLACKLIST
+
+
 async def master_router(user_input: str) -> Dict[str, Any]:
     user_input = user_input.strip()
     if not user_input:
@@ -318,7 +338,38 @@ async def master_router(user_input: str) -> Dict[str, Any]:
             "screen_content": "",
         }
 
+    # Deterministic fast-path for explicit "remember this" instructions.
+    # This must NOT depend on the LLM correctly classifying intent every
+    # time — a missed classification means a permanent-memory request
+    # silently never gets saved. Detect it directly and persist it here.
+    explicit_remember_cmd = any(
+        k in clean for k in [
+            "yaad rakh", "yaad rakhna", "yaad rakho", "hamesha yaad",
+            "याद रख", "याद रखना", "याद रखो", "हमेशा याद",
+            "remember this", "remember that", "from now on", "always remember",
+        ]
+    )
+    if explicit_remember_cmd:
+        fact_key = f"note_{int(time.time())}"
+        remember_fact(fact_key, user_input, category="boss_instructions")
+        return {
+            "intent": "chat",
+            "voice_response": "ठीक है Boss, ये मैंने हमेशा के लिए याद रख लिया।",
+            "task_payload": user_input,
+            "screen_content": "",
+        }
+
     active_summary = get_active_tasks_summary()
+
+    # Pull everything Maya has been told to remember so far and fold it
+    # into the router prompt as context. Without this, remember_fact()
+    # would write to the DB but nothing downstream would ever read it
+    # back, so Maya would still "start fresh" every conversation.
+    known_memory = recall_memory()
+    memory_context = "\n".join(
+        f"- {k}: {v}" for k, v in known_memory.items()
+        if k != "active_model_registry"  # internal system config, not user-facing
+    ) or "(kuch bhi yaad nahi hai abhi)"
 
     router_prompt = f"""
 You are Maya, a female AI executive.
@@ -327,6 +378,9 @@ Use female grammar: "करती हूँ", "बताती हूँ", "क�
 Never use male forms: "करता हूँ", "बताता हूँ".
 
 Classify the user's request into: chat | new_heavy_task | modify_task | generate_image
+
+THINGS YOU ALREADY KNOW ABOUT BOSS (from long-term memory):
+{memory_context}
 
 ACTIVE TASKS:
 {json.dumps(active_summary, ensure_ascii=False)}
@@ -629,6 +683,19 @@ async def download_or_view_artifact(file_path: str):
 async def websocket_live_call(ws: WebSocket):
     await ws.accept()
     global CURRENT_ACTIVE_WS
+
+    # Single Channel Lock (blueprint Layer 1): if a client is already
+    # connected when a new one hands shake, the old socket was only being
+    # replaced by reference here — it stayed technically open on the
+    # server until it noticed on its own and disconnected, i.e. a zombie
+    # connection. Explicitly close it so at most one live socket is ever
+    # actually open at a time.
+    if CURRENT_ACTIVE_WS is not None and CURRENT_ACTIVE_WS is not ws:
+        try:
+            await CURRENT_ACTIVE_WS.close(code=1000, reason="Replaced by new session")
+        except Exception as close_err:
+            print(f"[OLD WS CLOSE WARNING] {close_err}")
+
     CURRENT_ACTIVE_WS = ws
 
     try:
@@ -694,7 +761,7 @@ async def websocket_live_call(ws: WebSocket):
                         timeout=WHISPER_TIMEOUT_SECONDS,
                     )
                     cand = transcription.text.strip()
-                    if len(cand) > 1:
+                    if len(cand) > 1 and not is_hallucinated_transcript(cand):
                         user_query = cand
 
                 except asyncio.TimeoutError:
