@@ -62,7 +62,7 @@
             width: 6px; height: 6px; border-radius: 50%;
             background: var(--cyan);
             box-shadow: 0 0 8px var(--cyan);
-            transition: background 0.3s ease, box-shadow 0.3s ease;
+            transition: background 0.3s, box-shadow 0.3s;
         }
         #mainStage {
             flex: 1;
@@ -215,7 +215,6 @@
         .round-btn.active {
             background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
             border-color: var(--red);
-            box-shadow: 0 0 25px rgba(255, 0, 85, 0.6);
         }
         .stop-btn {
             width: 44px; height: 44px;
@@ -293,6 +292,7 @@
         let activeAudio = null;
         let mediaStream = null;
         let mediaRecorder = null;
+        let recordedChunks = [];
         let packetsSent = 0;
         let userInitiatedStop = false;
 
@@ -301,6 +301,13 @@
 
         let pendingAudioQueue = [];
         const MAX_PENDING_AUDIO = 5;
+
+        let audioCtx = null;
+        let analyser = null;
+        let micSource = null;
+        let animFrameId = null;
+        let isUserSpeaking = false;
+        let silenceTimer = null;
 
         let heartbeatInterval = null;
         let heartbeatTimeout = null;
@@ -401,15 +408,19 @@
             pendingAudioQueue = [];
             queued.forEach(item => trySendAudioBlob(item.mime, item.data));
         }
-                async function toggleCall() {
+
+        async function toggleCall() {
             if (!isCalling) {
+                try {
+                    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    if (audioCtx.state === 'suspended') await audioCtx.resume();
+                } catch(e){}
                 await startLiveCall();
             } else {
                 stopLiveCall();
             }
         }
-
-        async function startLiveCall() {
+           async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 packetsSent = 0;
@@ -433,6 +444,8 @@
                         const msg = JSON.parse(event.data);
                         if (msg.type === "audio_chunk" || msg.type === "audio") {
                             enqueueAudioChunk(msg.data);
+                        } else if (msg.type === "audio_end") {
+                            // Turn audio fully delivered
                         } else if (msg.type === "pong") {
                             clearTimeout(heartbeatTimeout);
                             const rtt = Date.now() - (msg.ts || lastPingSentAt);
@@ -507,12 +520,7 @@
         }
 
         function getSupportedMime() {
-            const types = [
-                "audio/webm;codecs=opus",
-                "audio/webm",
-                "audio/mp4",
-                "audio/ogg;codecs=opus"
-            ];
+            const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
             for (let t of types) {
                 if (MediaRecorder.isTypeSupported(t)) return t;
             }
@@ -525,37 +533,102 @@
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
                 });
 
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 512;
+                micSource = audioCtx.createMediaStreamSource(mediaStream);
+                micSource.connect(analyser);
+
                 const mimeType = getSupportedMime();
                 mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
 
-                mediaRecorder.ondataavailable = (event) => {
-                    // 4000 Bytes Noise Gate: Rejects silent background hum
-                    if (event.data && event.data.size > 4000 && !isMayaSpeaking) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            const b64 = reader.result.split(",")[1];
-                            trySendAudioBlob(mediaRecorder.mimeType || mimeType || "audio/webm", b64);
-                        };
-                        reader.readAsDataURL(event.data);
+                recordedChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) {
+                        recordedChunks.push(e.data);
                     }
                 };
 
-                // Non-destructive 2.5s continuous streaming slices
-                mediaRecorder.start(2500);
+                // W3C Session Assembly: Seals a complete standalone WebM container with full EBML header
+                mediaRecorder.onstop = () => {
+                    if (recordedChunks.length > 0 && !isMayaSpeaking && ws && ws.readyState === WebSocket.OPEN) {
+                        const completeBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || mimeType || "audio/webm" });
+                        recordedChunks = [];
+
+                        // 2000 bytes captures legitimate short phrases without dropping, while rejecting background noise
+                        if (completeBlob.size > 2000) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const b64 = reader.result.split(",")[1];
+                                trySendAudioBlob(completeBlob.type, b64);
+                            };
+                            reader.readAsDataURL(completeBlob);
+                        }
+                    } else {
+                        recordedChunks = [];
+                    }
+                };
+
+                const sampleRate = audioCtx.sampleRate;
+                const binSize = sampleRate / 512;
+                const startBin = Math.floor(300 / binSize);
+                const endBin = Math.min(Math.floor(3400 / binSize), analyser.frequencyBinCount);
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function monitorVAD() {
+                    if (!isCalling) return;
+                    analyser.getByteFrequencyData(dataArray);
+
+                    let sum = 0;
+                    let count = 0;
+                    for (let i = startBin; i < endBin; i++) {
+                        sum += dataArray[i];
+                        count++;
+                    }
+                    let avgEnergy = count > 0 ? (sum / count) : 0;
+
+                    if (avgEnergy > 14 && !isMayaSpeaking) {
+                        if (!isUserSpeaking) {
+                            isUserSpeaking = true;
+                            orb.className = "quantum-orb listening";
+                            recordedChunks = [];
+                            if (mediaRecorder.state === "inactive") {
+                                try { mediaRecorder.start(); } catch(e){}
+                            }
+                        }
+                        clearTimeout(silenceTimer);
+                    } else if (isUserSpeaking) {
+                        clearTimeout(silenceTimer);
+                        silenceTimer = setTimeout(() => {
+                            if (isUserSpeaking) {
+                                isUserSpeaking = false;
+                                orb.className = "quantum-orb";
+                                if (mediaRecorder.state === "recording") {
+                                    try { mediaRecorder.stop(); } catch(e){}
+                                }
+                            }
+                        }, 700);
+                    }
+
+                    animFrameId = requestAnimationFrame(monitorVAD);
+                }
+
+                monitorVAD();
                 debugBadge.innerHTML = `mic: ACTIVE <br> sent: 0`;
 
             } catch (err) {
                 console.error("Mic error:", err);
                 debugBadge.innerHTML = `mic: ERROR <br> ${err.message}`;
-                setStatus("माइक चालू नहीं हो सका: " + err.message);
+                setStatus("माइक चालू नहीं हो सका।");
             }
         }
 
         function enqueueAudioChunk(base64Data) {
             audioQueue.push(base64Data);
-            if (!isPlayingQueue) {
-                playNextInQueue();
-            }
+            if (!isPlayingQueue) playNextInQueue();
         }
 
         function playNextInQueue() {
@@ -564,10 +637,6 @@
                 isMayaSpeaking = false;
                 orb.className = "quantum-orb";
                 activeAudio = null;
-                // Unmute mic hardware track when Maya finishes sentence
-                if (mediaStream) {
-                    mediaStream.getAudioTracks().forEach(t => t.enabled = true);
-                }
                 return;
             }
 
@@ -575,10 +644,10 @@
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
 
-            // Half-Duplex Acoustic Lock: Mute track without stopping MediaRecorder (Zero Mobile Crash)
-            if (mediaStream) {
-                mediaStream.getAudioTracks().forEach(t => t.enabled = false);
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                try { mediaRecorder.stop(); } catch (_) {}
             }
+            isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
             activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
@@ -598,9 +667,6 @@
             }
             isMayaSpeaking = false;
             orb.className = "quantum-orb";
-            if (mediaStream) {
-                mediaStream.getAudioTracks().forEach(t => t.enabled = true);
-            }
         }
 
         function showActionImage(url) {
@@ -628,11 +694,18 @@
 
             closeActionCard();
             stopHeartbeat();
+            if (animFrameId) cancelAnimationFrame(animFrameId);
+            clearTimeout(silenceTimer);
 
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 try { mediaRecorder.stop(); } catch (_) {}
             }
             mediaRecorder = null;
+
+            if (audioCtx) {
+                try { audioCtx.close(); } catch (_) {}
+                audioCtx = null;
+            }
 
             if (mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
@@ -646,4 +719,4 @@
         }
     </script>
 </body>
-</html>
+</html>     
