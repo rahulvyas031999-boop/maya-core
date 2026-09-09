@@ -37,6 +37,7 @@
             background: var(--glass);
             border: 1px solid var(--border);
             border-radius: 10px;
+            margin-top: 100px; /* Space for diagnostic HUD */
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
@@ -228,13 +229,13 @@
         /* LIVE TELEMETRY HUD OVERLAY */
         #diagnosticHUD {
             position: fixed;
-            top: 10px;
-            left: 10px;
-            right: 10px;
+            top: 6px;
+            left: 8px;
+            right: 8px;
             max-width: 460px;
             margin: 0 auto;
             z-index: 9999;
-            background: rgba(3, 6, 18, 0.94);
+            background: rgba(3, 6, 18, 0.96);
             border: 1px solid #00f3ff;
             box-shadow: 0 0 15px rgba(0, 243, 255, 0.3);
             color: #0f0;
@@ -255,8 +256,8 @@
     <div id="diagnosticHUD">
         <div class="hud-row"><span>AUDIO TELEMETRY</span><span id="d_ws" class="hud-err">WS: DISCONNECTED</span></div>
         <div class="hud-row"><span>MIC HARDWARE:</span><span id="d_mic">TRACK: OFF</span></div>
-        <div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 10)</span></div>
-        <div class="hud-row"><span>VAD STATE:</span><span id="d_vad">IDLE | User: NO</span></div>
+        <div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 15)</span></div>
+        <div class="hud-row"><span>VAD STATE:</span><span id="d_vad">MayaSpeaking: false | UserRec: false</span></div>
         <div class="hud-row"><span>LAST DELIVERY:</span><span id="d_delivery">Size: 0B | Sent: 0</span></div>
     </div>
 
@@ -284,7 +285,7 @@
     </div>
 
     <div id="telegramFallback">
-        <p>⚠️ नेटवर्क कमज़ोर लग रहा है। Telegram पर जारी रखें?</p>
+        <p>⚠️ नेटवर्क धीमा है। Telegram पर जारी रखें?</p>
         <div class="fallback-btns">
             <a id="telegramLinkBtn" href="#" target="_blank" class="holo-btn telegram-btn">💬 TELEGRAM MODE</a>
             <button onclick="dismissTelegramFallback()" class="holo-btn close-btn">❌ रहने दो</button>
@@ -387,7 +388,7 @@
                 stopLiveCall();
             }
         }
-                async function startLiveCall() {
+               async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 packetsSent = 0;
@@ -469,7 +470,7 @@
                     mediaStream.getTracks().forEach(t => t.stop());
                 }
 
-                // Chrome Android AEC Safe Constraint
+                // Explicit Android Audio constraints
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
@@ -503,33 +504,14 @@
                 recordedChunks = [];
 
                 mediaRecorder.ondataavailable = (e) => {
-                    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
-                };
-
-                mediaRecorder.onstop = () => {
-                    if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                        const completeBlob = new Blob(recordedChunks, { type: "audio/webm" });
-                        const blobSize = completeBlob.size;
-                        recordedChunks = [];
-
-                        if (blobSize > 1500) {
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                                const b64 = reader.result.split(",")[1];
-                                ws.send(JSON.stringify({ type: "audio_blob", mime: "audio/webm", data: b64 }));
-                                packetsSent++;
-                                d_delivery.className = "hud-good";
-                                d_delivery.innerText = `DELIVERED: ${blobSize}B | Sent: ${packetsSent}`;
-                            };
-                            reader.readAsDataURL(completeBlob);
-                        } else {
-                            d_delivery.className = "hud-warn";
-                            d_delivery.innerText = `REJECTED: Too small (${blobSize}B < 1500B)`;
-                        }
-                    } else {
-                        recordedChunks = [];
+                    // Collect audio chunks continuously if user was actively speaking
+                    if (e.data && e.data.size > 0 && isUserSpeaking) {
+                        recordedChunks.push(e.data);
                     }
                 };
+
+                // Continuous recording: timeslice 100ms keeps pipeline active without start/stop crashes
+                mediaRecorder.start(100);
 
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
@@ -541,41 +523,57 @@
                     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let currentVol = Math.round(sum / dataArray.length);
 
-                    // LIVE HUD TELEMETRY UPDATE
-                    if (currentVol > 10) {
+                    // Real-time HUD energy updates
+                    if (currentVol > 15) {
                         d_vol.className = "hud-good";
                         d_vol.innerText = `Vol: ${currentVol} (Speaking DETECTED)`;
                     } else {
                         d_vol.className = "";
-                        d_vol.innerText = `Vol: ${currentVol} (Threshold: 10)`;
+                        d_vol.innerText = `Vol: ${currentVol} (Threshold: 15)`;
                     }
 
-                    d_vad.innerText = `MayaSpeaking: ${isMayaSpeaking} | UserRec: ${isUserSpeaking}`;
-
-                    // VAD Trigger
-                    if (currentVol > 10 && !isMayaSpeaking) {
+                    // Audio gate: Trigger user turn only when Maya is NOT speaking
+                    if (currentVol > 15 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
                             recordedChunks = [];
-                            if (mediaRecorder.state === "inactive") {
-                                try { mediaRecorder.start(); } catch(e){}
-                            }
                         }
                         clearTimeout(silenceTimer);
                     } else if (isUserSpeaking) {
                         clearTimeout(silenceTimer);
+                        // Silence threshold: 750ms seals the speech segment
                         silenceTimer = setTimeout(() => {
                             if (isUserSpeaking) {
                                 isUserSpeaking = false;
                                 orb.className = "quantum-orb";
-                                if (mediaRecorder.state === "recording") {
-                                    try { mediaRecorder.stop(); } catch(e){}
+
+                                if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                                    const completeBlob = new Blob(recordedChunks, { type: "audio/webm" });
+                                    const blobSize = completeBlob.size;
+                                    recordedChunks = [];
+
+                                    if (blobSize > 1500) {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => {
+                                            const b64 = reader.result.split(",")[1];
+                                            ws.send(JSON.stringify({ type: "audio_blob", mime: "audio/webm", data: b64 }));
+                                            packetsSent++;
+                                            d_delivery.className = "hud-good";
+                                            d_delivery.innerText = `DELIVERED: ${blobSize}B | Sent: ${packetsSent}`;
+                                        };
+                                        reader.readAsDataURL(completeBlob);
+                                    } else {
+                                        d_delivery.className = "hud-warn";
+                                        d_delivery.innerText = `REJECTED: Too small (${blobSize}B < 1500B)`;
+                                    }
                                 }
                             }
                         }, 750);
                     }
 
+                    // Update VAD state on every frame after evaluation
+                    d_vad.innerText = `MayaSpeaking: ${isMayaSpeaking} | UserRec: ${isUserSpeaking}`;
                     animFrameId = requestAnimationFrame(monitorVAD);
                 }
 
@@ -605,10 +603,6 @@
             isPlayingQueue = true;
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
-
-            if (mediaRecorder && mediaRecorder.state === "recording") {
-                try { mediaRecorder.stop(); } catch (_) {}
-            }
             isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
@@ -651,8 +645,8 @@
             orb.className = "quantum-orb";
 
             d_mic.innerText = "TRACK: OFF";
-            d_vol.innerText = "Vol: 0 (Threshold: 10)";
-            d_vad.innerText = "IDLE | User: NO";
+            d_vol.innerText = "Vol: 0 (Threshold: 15)";
+            d_vad.innerText = "MayaSpeaking: false | UserRec: false";
 
             closeActionCard();
             stopHeartbeat();
@@ -670,4 +664,4 @@
         }
     </script>
 </body>
-</html>
+</html> 
