@@ -255,8 +255,8 @@
         <div class="hud-row"><span>AUDIO TELEMETRY</span><span id="d_ws" class="hud-err">WS: DISCONNECTED</span></div>
         <div class="hud-row"><span>MIC HARDWARE:</span><span id="d_mic">TRACK: OFF</span></div>
         <div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 15)</span></div>
-        <div class="hud-row"><span>VAD STATE:</span><span id="d_vad">MayaSpeaking: false | UserRec: false</span></div>
-        <div class="hud-row"><span>LAST DELIVERY:</span><span id="d_delivery">Size: 0B | Sent: 0</span></div>
+        <div class="hud-row"><span>VAD STATE:</span><span id="d_vad">Maya: IDLE | UserRec: false</span></div>
+        <div class="hud-row"><span>DATA PIPE:</span><span id="d_delivery">Size: 0B | Sent: 0</span></div>
     </div>
 
     <header>
@@ -302,7 +302,6 @@
         let ws = null;
         let isCalling = false;
         let isMayaSpeaking = false;
-        let activeAudio = null;
         let mediaStream = null;
         let mediaRecorder = null;
         let recordedChunks = [];
@@ -325,6 +324,7 @@
 
         let audioQueue = [];
         let isPlayingQueue = false;
+        let activeSourceNode = null;
 
         let telegramLink = null;
         let weakNetworkTimer = null;
@@ -386,7 +386,7 @@
                 stopLiveCall();
             }
         }
-                async function startLiveCall() {
+               async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 packetsSent = 0;
@@ -478,18 +478,20 @@
 
                 const track = mediaStream.getAudioTracks()[0];
                 d_mic.className = "hud-good";
-                d_mic.innerText = `READY | Muted: ${track.muted} | State: ${track.readyState}`;
+                d_mic.innerText = `READY | Live: ${track.readyState}`;
 
                 track.onmute = () => {
                     d_mic.className = "hud-err";
-                    d_mic.innerText = "ALERT: OS HARDWARE MUTED MIC!";
+                    d_mic.innerText = "ALERT: MIC MUTED BY OS!";
                 };
                 track.onunmute = () => {
                     d_mic.className = "hud-good";
-                    d_mic.innerText = "TRACK: ACTIVE (UNMUTED)";
+                    d_mic.innerText = "TRACK: ACTIVE";
                 };
 
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
 
                 analyser = audioCtx.createAnalyser();
@@ -497,13 +499,13 @@
                 micSource = audioCtx.createMediaStreamSource(mediaStream);
                 micSource.connect(analyser);
 
-                function createAndStartSessionRecorder() {
+                function startFreshRecorder() {
+                    recordedChunks = [];
                     try {
                         mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
                     } catch (e) {
                         mediaRecorder = new MediaRecorder(mediaStream);
                     }
-                    recordedChunks = [];
 
                     mediaRecorder.ondataavailable = (e) => {
                         if (e.data && e.data.size > 0) {
@@ -529,18 +531,17 @@
                                 reader.readAsDataURL(completeBlob);
                             } else {
                                 d_delivery.className = "hud-warn";
-                                d_delivery.innerText = `REJECTED: Too small (${blobSize}B < 1500B)`;
+                                d_delivery.innerText = `REJECTED: ${blobSize}B < 1500B`;
                             }
                         } else {
+                            d_delivery.className = "hud-err";
+                            d_delivery.innerText = "FAIL: ZERO_BYTES_CAPTURED";
                             recordedChunks = [];
                         }
                     };
 
-                    try {
-                        mediaRecorder.start();
-                    } catch (err) {
-                        console.error("[RECORDER START ERROR]", err);
-                    }
+                    // Timeslice 250ms ensures ondataavailable triggers reliably on mobile drivers
+                    mediaRecorder.start(250);
                 }
 
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -565,7 +566,7 @@
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
-                            createAndStartSessionRecorder();
+                            startFreshRecorder();
                         }
                         clearTimeout(silenceTimer);
                     } else if (isUserSpeaking) {
@@ -582,10 +583,10 @@
                                     }
                                 }
                             }
-                        }, 750);
+                        }, 800);
                     }
 
-                    d_vad.innerText = `MayaSpeaking: ${isMayaSpeaking} | UserRec: ${isUserSpeaking}`;
+                    d_vad.innerText = `Maya: ${isMayaSpeaking ? "SPEAKING" : "IDLE"} | UserRec: ${isUserSpeaking}`;
                     animFrameId = requestAnimationFrame(monitorVAD);
                 }
 
@@ -593,7 +594,7 @@
             } catch (err) {
                 console.error("Mic init error:", err);
                 d_mic.className = "hud-err";
-                d_mic.innerText = `FAIL: ${err.name} - ${err.message}`;
+                d_mic.innerText = `FAIL: ${err.name}`;
             }
         }
 
@@ -602,13 +603,12 @@
             if (!isPlayingQueue) playNextInQueue();
         }
 
-        function playNextInQueue() {
+        async function playNextInQueue() {
             if (!audioQueue.length) {
                 isPlayingQueue = false;
                 isMayaSpeaking = false;
                 orb.className = "quantum-orb";
-                activeAudio = null;
-                if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+                activeSourceNode = null;
                 return;
             }
 
@@ -622,18 +622,41 @@
             isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
-            activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
-            activeAudio.onended = () => { playNextInQueue(); };
-            activeAudio.onerror = () => { playNextInQueue(); };
-            activeAudio.play().catch(() => { playNextInQueue(); });
+            try {
+                const binaryString = atob(nextChunk);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+                const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer);
+                activeSourceNode = audioCtx.createBufferSource();
+                activeSourceNode.buffer = audioBuffer;
+                activeSourceNode.connect(audioCtx.destination);
+
+                activeSourceNode.onended = () => {
+                    playNextInQueue();
+                };
+
+                activeSourceNode.start(0);
+            } catch (decodeErr) {
+                console.error("WebAudio Decode Error:", decodeErr);
+                playNextInQueue();
+            }
         }
 
         function interruptPlayback() {
             audioQueue = [];
             isPlayingQueue = false;
-            if (activeAudio) {
-                activeAudio.pause();
-                activeAudio = null;
+            if (activeSourceNode) {
+                try { activeSourceNode.stop(); } catch (_) {}
+                activeSourceNode = null;
             }
             isMayaSpeaking = false;
             orb.className = "quantum-orb";
@@ -662,7 +685,7 @@
 
             d_mic.innerText = "TRACK: OFF";
             d_vol.innerText = "Vol: 0 (Threshold: 15)";
-            d_vad.innerText = "MayaSpeaking: false | UserRec: false";
+            d_vad.innerText = "Maya: IDLE | UserRec: false";
 
             closeActionCard();
             stopHeartbeat();
@@ -673,11 +696,10 @@
                 try { mediaRecorder.stop(); } catch (_) {}
             }
             mediaRecorder = null;
-            if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
             if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
             ws = null;
         }
     </script>
 </body>
-</html>
+</html> 
