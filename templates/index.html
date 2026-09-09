@@ -37,7 +37,7 @@
             background: var(--glass);
             border: 1px solid var(--border);
             border-radius: 10px;
-            margin-top: 100px; /* Space for diagnostic HUD */
+            margin-top: 105px;
         }
         .hud-title {
             font-family: 'Orbitron', sans-serif;
@@ -225,8 +225,6 @@
             cursor: pointer;
             display: flex; align-items: center; justify-content: center;
         }
-
-        /* LIVE TELEMETRY HUD OVERLAY */
         #diagnosticHUD {
             position: fixed;
             top: 6px;
@@ -388,7 +386,7 @@
                 stopLiveCall();
             }
         }
-               async function startLiveCall() {
+                async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 packetsSent = 0;
@@ -470,7 +468,6 @@
                     mediaStream.getTracks().forEach(t => t.stop());
                 }
 
-                // Explicit Android Audio constraints
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: false,
@@ -500,18 +497,51 @@
                 micSource = audioCtx.createMediaStreamSource(mediaStream);
                 micSource.connect(analyser);
 
-                mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
-                recordedChunks = [];
-
-                mediaRecorder.ondataavailable = (e) => {
-                    // Collect audio chunks continuously if user was actively speaking
-                    if (e.data && e.data.size > 0 && isUserSpeaking) {
-                        recordedChunks.push(e.data);
+                function createAndStartSessionRecorder() {
+                    try {
+                        mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
+                    } catch (e) {
+                        mediaRecorder = new MediaRecorder(mediaStream);
                     }
-                };
+                    recordedChunks = [];
 
-                // Continuous recording: timeslice 100ms keeps pipeline active without start/stop crashes
-                mediaRecorder.start(100);
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data && e.data.size > 0) {
+                            recordedChunks.push(e.data);
+                        }
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                            const completeBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+                            const blobSize = completeBlob.size;
+                            recordedChunks = [];
+
+                            if (blobSize > 1500) {
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                    const b64 = reader.result.split(",")[1];
+                                    ws.send(JSON.stringify({ type: "audio_blob", mime: completeBlob.type, data: b64 }));
+                                    packetsSent++;
+                                    d_delivery.className = "hud-good";
+                                    d_delivery.innerText = `DELIVERED: ${blobSize}B | Sent: ${packetsSent}`;
+                                };
+                                reader.readAsDataURL(completeBlob);
+                            } else {
+                                d_delivery.className = "hud-warn";
+                                d_delivery.innerText = `REJECTED: Too small (${blobSize}B < 1500B)`;
+                            }
+                        } else {
+                            recordedChunks = [];
+                        }
+                    };
+
+                    try {
+                        mediaRecorder.start();
+                    } catch (err) {
+                        console.error("[RECORDER START ERROR]", err);
+                    }
+                }
 
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
@@ -523,7 +553,6 @@
                     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let currentVol = Math.round(sum / dataArray.length);
 
-                    // Real-time HUD energy updates
                     if (currentVol > 15) {
                         d_vol.className = "hud-good";
                         d_vol.innerText = `Vol: ${currentVol} (Speaking DETECTED)`;
@@ -532,47 +561,30 @@
                         d_vol.innerText = `Vol: ${currentVol} (Threshold: 15)`;
                     }
 
-                    // Audio gate: Trigger user turn only when Maya is NOT speaking
                     if (currentVol > 15 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
-                            recordedChunks = [];
+                            createAndStartSessionRecorder();
                         }
                         clearTimeout(silenceTimer);
                     } else if (isUserSpeaking) {
                         clearTimeout(silenceTimer);
-                        // Silence threshold: 750ms seals the speech segment
                         silenceTimer = setTimeout(() => {
                             if (isUserSpeaking) {
                                 isUserSpeaking = false;
                                 orb.className = "quantum-orb";
-
-                                if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                                    const completeBlob = new Blob(recordedChunks, { type: "audio/webm" });
-                                    const blobSize = completeBlob.size;
-                                    recordedChunks = [];
-
-                                    if (blobSize > 1500) {
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => {
-                                            const b64 = reader.result.split(",")[1];
-                                            ws.send(JSON.stringify({ type: "audio_blob", mime: "audio/webm", data: b64 }));
-                                            packetsSent++;
-                                            d_delivery.className = "hud-good";
-                                            d_delivery.innerText = `DELIVERED: ${blobSize}B | Sent: ${packetsSent}`;
-                                        };
-                                        reader.readAsDataURL(completeBlob);
-                                    } else {
-                                        d_delivery.className = "hud-warn";
-                                        d_delivery.innerText = `REJECTED: Too small (${blobSize}B < 1500B)`;
+                                if (mediaRecorder && mediaRecorder.state === "recording") {
+                                    try {
+                                        mediaRecorder.stop();
+                                    } catch (e) {
+                                        console.error("[RECORDER STOP ERROR]", e);
                                     }
                                 }
                             }
                         }, 750);
                     }
 
-                    // Update VAD state on every frame after evaluation
                     d_vad.innerText = `MayaSpeaking: ${isMayaSpeaking} | UserRec: ${isUserSpeaking}`;
                     animFrameId = requestAnimationFrame(monitorVAD);
                 }
@@ -603,6 +615,10 @@
             isPlayingQueue = true;
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
+
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                try { mediaRecorder.stop(); } catch (_) {}
+            }
             isUserSpeaking = false;
 
             const nextChunk = audioQueue.shift();
@@ -664,4 +680,4 @@
         }
     </script>
 </body>
-</html> 
+</html>
