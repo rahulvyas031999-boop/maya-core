@@ -175,10 +175,12 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
             except Exception as exc:
                 print(f"[ARTIFACT ERROR] {exc}")
         
+        # Dynamic Resolution: protects against socket reconnection races
         global CURRENT_ACTIVE_WS
-        if CURRENT_ACTIVE_WS:
+        ws_target = CURRENT_ACTIVE_WS
+        if ws_target:
             await safe_send_json(
-                CURRENT_ACTIVE_WS,
+                ws_target,
                 {"type": "task_complete", "task_id": task_id, "success": success, "text": "Boss, बैकग्राउंड टास्क पूरा हो गया है।"}
             )
     except Exception as exc:
@@ -454,7 +456,9 @@ async def websocket_live_call(ws: WebSocket):
             elif msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
-                    if len(wav_bytes) < 1500:
+                    
+                    # Calibrated server gate: 800 bytes captures valid short phrases
+                    if len(wav_bytes) < 800:
                         print(f"[WHISPER DROP]: Blob too small ({len(wav_bytes)} bytes)")
                         continue
 
