@@ -8,13 +8,12 @@
 
 ---
 
-
 ## 2. Hardware-Verified Model Registry
 Only models with confirmed 100% inference success on verified API credentials are permitted:
 
 | Role | Provider | Model ID | Token / Rate Threshold | Failure Mode |
 | :--- | :--- | :--- | :--- | :--- |
-| **Master Router (Fast Brain)** | Groq | openai/gpt-oss-20b | Max **300** tokens/call *(raised from 70 — the JSON payload includes task_payload plus several other fields; 70 was truncating responses mid-JSON on longer user messages)* | Fallback to Gemini |
+| **Master Router (Fast Brain)** | Groq | openai/gpt-oss-20b | Max **800** tokens/call *(raised from 300 to prevent JSON truncation on complex image/task payloads)* | Fallback to Gemini |
 | **Speech-to-Text (STT)** | Groq | whisper-large-v3-turbo | 16kHz Mono, Min 7KB chunk | Drop phantom tokens (blacklist, see Layer 1) |
 | **Hard Fallback & Heavy Brain** | Google Gemini | gemini-3.6-flash | v1alpha API | Fail-safe executor |
 | **Neural Speech (TTS)** | Azure / Edge | hi-IN-SwaraNeural | Sentence-level streaming queue *(upgraded from single-buffer — sentences are synthesized and sent as soon as ready so playback starts before the full reply is done)* | Per-sentence 10s timeout, skip chunk on failure |
@@ -42,7 +41,7 @@ Only models with confirmed 100% inference success on verified API credentials ar
   - `modify_task`: Dynamically patches active background tasks mid-execution.
   - `generate_image`: Requires explicit verbal confirmation ("फोटो बनाओ", "image banao").
   - `switch_telegram`: Deterministic keyword fast-path (no LLM round-trip) to fall back to low-bandwidth Telegram mode.
-- **Token Shield:** Output capped at **300** tokens (see Section 2 rationale) to balance Groq 429 TPM protection against JSON truncation.
+- **Token Shield:** Output capped at **800** tokens (see Section 2 rationale) to balance Groq 429 TPM protection against JSON truncation.
 - **Long-Term Memory Context:** Before classification, `recall_memory()` pulls everything Boss has told Maya to remember and injects it into the router prompt as "THINGS YOU ALREADY KNOW ABOUT BOSS," so responses are actually informed by memory, not just storing it unused.
 
 ### Layer 3: Persistent Storage & Long-Term Memory
@@ -82,4 +81,4 @@ Only models with confirmed 100% inference success on verified API credentials ar
 1. **Memory wiring completed** — `remember_fact` / `recall_memory` imported and connected to `master_router`.
 2. **Single Channel Lock hardened** — old WebSocket is now explicitly closed, not just reference-replaced.
 3. **Hallucination Shield completed** — explicit blacklist check added after Whisper transcription, on top of the existing temperature=0.0 mitigation.
-4. **Token Shield documented** — 70→300 token change in the router call was a deliberate, already-shipped fix (JSON truncation), not a spec violation; this blueprint now reflects the real number.
+4. **Token Shield documented** — 300→800 token change in the router call to prevent JSON truncation on heavy tasks and image generation logic.
