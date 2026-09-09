@@ -27,6 +27,7 @@ ENV DB_PATH=maya_jobs.db
 ENV STATE_FILE_PATH=maya_state.json
 ENV WORKSPACE_PATH=workspace
 
+
 EXPOSE 10000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
