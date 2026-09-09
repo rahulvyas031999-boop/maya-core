@@ -27,6 +27,7 @@ def init_db():
         )
     """)
 
+  
     # 2. Permanent Long-Term Memory (User Directives, Configs & Knowledge)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_memory (
