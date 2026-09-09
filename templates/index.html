@@ -296,9 +296,9 @@
         	<button id="callToggle" class="round-btn" onclick="toggleCall()">📞</button>
         	<button class="stop-btn" onclick="interruptPlayback()" title="रोकें">⏹</button>
     	</div>
-	</div>
+	 </div>
 
-	<script>
+		<script>
     	let ws = null;
     	let isCalling = false;
     	let isMayaSpeaking = false;
@@ -466,8 +466,6 @@
 
     	async function initHardwareAudio() {
         	try {
-            	// FIX: cancel any VAD loop still running from before a reconnect,
-            	// otherwise reconnects stack up multiple parallel monitorVAD loops.
             	if (animFrameId) {
                 	cancelAnimationFrame(animFrameId);
                 	animFrameId = null;
@@ -508,7 +506,6 @@
             	micSource = audioCtx.createMediaStreamSource(mediaStream);
             	micSource.connect(analyser);
 
-            	// Safe Single-Instance Recorder
             	try {
                 	mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
             	} catch (e) {
@@ -517,8 +514,9 @@
 
             	recordedChunks = [];
 
+            	// FIX 1: Removed && isUserSpeaking condition from data available check
             	mediaRecorder.ondataavailable = (e) => {
-                	if (e.data && e.data.size > 0 && isUserSpeaking) {
+                	if (e.data && e.data.size > 0) {
                     	recordedChunks.push(e.data);
                 	}
             	};
@@ -528,6 +526,13 @@
                     	const completeBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
                     	const blobSize = completeBlob.size;
                     	recordedChunks = [];
+
+                    	// FIX 2: Check for 0 byte stalling
+                    	if (blobSize === 0) {
+                        	d_delivery.className = "hud-err";
+                        	d_delivery.innerText = "FAIL: ENCODER_STALL (0 Bytes)";
+                        	return;
+                    	}
 
                     	if (blobSize > 600) {
                         	const reader = new FileReader();
@@ -574,13 +579,13 @@
                         	orb.className = "quantum-orb listening";
                         	recordedChunks = [];
                         	if (mediaRecorder.state === "inactive") {
-                            	try { mediaRecorder.start(100); } catch(e){}
+                            	// FIX 3: Removed 100ms timeslice to prevent buffer deadlock
+                            	try { mediaRecorder.start(); } catch(e){}
                         	}
                     	}
                     	clearTimeout(silenceTimer);
                 	} else if (isUserSpeaking) {
                     	clearTimeout(silenceTimer);
-                    	// Natural 900ms pause tolerance
                     	silenceTimer = setTimeout(() => {
                         	if (isUserSpeaking) {
                             	isUserSpeaking = false;
@@ -639,7 +644,6 @@
         	isUserSpeaking = false;
 
         	const nextChunk = audioQueue.shift();
-        	// Robust Native Audio with DataURI prevents WebAudio Decoding crashes
         	activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
 
         	activeAudio.onended = () => {
