@@ -181,7 +181,6 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
         global CURRENT_ACTIVE_WS
         ws_target = CURRENT_ACTIVE_WS
         if ws_target:
-            # FIX: Send as 'reply_text' so HUD processes it, and trigger TTS directly
             msg = "Boss, बैकग्राउंड टास्क पूरा हो गया है।" if success else "Boss, बैकग्राउंड टास्क में कुछ एरर आ गया है।"
             await safe_send_json(ws_target, {"type": "reply_text", "text": msg})
             await stream_neural_speech(ws_target, msg)
@@ -210,6 +209,7 @@ HALLUCINATION_BLACKLIST = {"thank you", "thanks for watching", "subtitles", "sub
 
 def is_hallucinated_transcript(text: str) -> bool:
     return text.strip().lower().strip(".,!?।") in HALLUCINATION_BLACKLIST
+
 async def master_router(user_input: str) -> Dict[str, Any]:
     user_input = user_input.strip()
     if not user_input:
@@ -221,7 +221,6 @@ async def master_router(user_input: str) -> Dict[str, Any]:
         return {"intent": "switch_telegram", "voice_response": "ठीक है Boss, Telegram मोड पर स्विच कर रही हूँ।", "task_payload": "", "screen_content": ""}
 
     if any(k in clean for k in ["yaad rakh", "yaad rakhna", "remember this", "always remember"]):
-        # Minor optimization: asyncio.to_thread for sqlite write
         await asyncio.to_thread(remember_fact, f"note_{int(time.time())}", user_input, category="boss_instructions")
         return {"intent": "chat", "voice_response": "ठीक है Boss, ये मैंने याद रख लिया।", "task_payload": user_input, "screen_content": ""}
 
@@ -247,7 +246,7 @@ Return ONLY JSON: {{"intent": "chat", "voice_response": "one crisp Hindi sentenc
                         model="openai/gpt-oss-20b",
                         messages=[{"role": "system", "content": "Return JSON only."}, {"role": "user", "content": router_prompt}],
                         response_format={"type": "json_object"},
-                        max_tokens=300
+                        max_tokens=800  # FIX: 300 se 800 kar diya gaya taki JSON error/crash na ho
                     )
                 ),
                 timeout=ROUTER_TIMEOUT_SECONDS
@@ -440,7 +439,6 @@ async def websocket_live_call(ws: WebSocket):
     try:
         welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
         await safe_send_json(ws, {"type": "reply_text", "text": welcome_text})
-        # FIX: Non-blocking welcome TTS
         asyncio.create_task(stream_neural_speech(ws, welcome_text))
     except Exception as ge:
         print(f"[WELCOME ERROR] {ge}")
@@ -533,7 +531,6 @@ async def websocket_live_call(ws: WebSocket):
                         voice_msg = "Boss, Telegram अभी उपलब्ध नहीं है।"
 
                 await safe_send_json(ws, {"type": "reply_text", "text": voice_msg})
-                # FIX: Non-blocking TTS execution to keep WebSocket alive
                 asyncio.create_task(stream_neural_speech(ws, voice_msg))
     except WebSocketDisconnect:
         pass
@@ -555,4 +552,3 @@ async def home():
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>Maya Sovereign OS Active</h1>"
-
