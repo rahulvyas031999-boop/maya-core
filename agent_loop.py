@@ -29,16 +29,13 @@ PROTOCOL:
 
 
 class MockMessage:
-    """Used to normalize the Gemini fallback response into the same shape
-    as a Groq ChatCompletionMessage, so run_react_agent can treat both
-    providers identically."""
+    """Used to normalize the Gemini fallback response."""
     def __init__(self, content, tool_calls=None):
         self.content = content
         self.tool_calls = tool_calls
 
 
 async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
-    # 1. Primary: Verified Groq openai/gpt-oss-20b (full tool-calling support)
     if groq_client:
         try:
             loop = asyncio.get_running_loop()
@@ -56,16 +53,10 @@ async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
         except Exception as e:
             print(f"[REACT GROQ WARNING]: {e}. Switching to Gemini {FALLBACK_GEMINI_MODEL}...")
 
-    # 2. Hard Fallback: Google Gemini 3.6 Flash
-    # NOTE: This fallback path does NOT execute tools. It is a text-only
-    # safety net so the Boss still gets a coherent answer if Groq is down,
-    # rather than a silent crash - but multi-step tasks that genuinely
-    # require tool use (search/file/code) will not be completed by this
-    # path. We tell the model that explicitly so it doesn't pretend to have
-    # used a tool it doesn't have.
     if gemini_client:
         try:
-            prompt_text = "\n".join([f"{m['role']}: {m.get('content', '')}" for m in messages])
+            # FIX 1: Safe dict access using .get() to prevent TypeErrors
+            prompt_text = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages])
             prompt_text += (
                 "\n\n[SYSTEM NOTE: You are running in fallback mode with NO tool access. "
                 "Do not claim to have searched, written files, or executed code. "
@@ -100,13 +91,28 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
             return "Boss, मॉडल्स पर अस्थायी लोड के कारण रिस्पॉन्स नहीं मिला।"
 
         tool_calls = getattr(msg, "tool_calls", None)
+        final_ans = getattr(msg, "content", None)
 
         if not tool_calls:
-            final_ans = getattr(msg, "content", None) or "Task completed."
             print(f"[REACT ENGINE] Finished at turn {turn + 1}")
-            return final_ans
+            return final_ans or "Task completed."
 
-        messages.append(msg)
+        # FIX 2: Convert SDK Object to Pure Dictionary to prevent cross-SDK crashes
+        assistant_msg = {"role": "assistant", "content": final_ans}
+        
+        formatted_tool_calls = []
+        for tc in tool_calls:
+            formatted_tool_calls.append({
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments
+                }
+            })
+        assistant_msg["tool_calls"] = formatted_tool_calls
+        
+        messages.append(assistant_msg)
 
         for tc in tool_calls:
             fn_name = tc.function.name
@@ -132,11 +138,6 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
                 "content": str(observation)
             })
 
-    # FIX: previously returned "Task completed. Workspace files updated."
-    # here unconditionally, even though reaching this point means the loop
-    # was cut off by max_turns WITHOUT the model ever giving a final
-    # (non-tool-call) answer. That was a misleading success message for an
-    # incomplete task. Report it honestly instead.
     return (
         "Boss, task ज़्यादा complex निकला और तय turns में पूरा नहीं हो पाया। "
         "कृपया task को छोटे हिस्सों में तोड़कर दोबारा भेजें।"
