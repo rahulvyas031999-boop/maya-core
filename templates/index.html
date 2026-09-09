@@ -254,7 +254,7 @@
     <div id="diagnosticHUD">
         <div class="hud-row"><span>AUDIO TELEMETRY</span><span id="d_ws" class="hud-err">WS: DISCONNECTED</span></div>
         <div class="hud-row"><span>MIC HARDWARE:</span><span id="d_mic">TRACK: OFF</span></div>
-        <div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 15)</span></div>
+        <div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 14)</span></div>
         <div class="hud-row"><span>VAD STATE:</span><span id="d_vad">Maya: IDLE | UserRec: false</span></div>
         <div class="hud-row"><span>DATA PIPE:</span><span id="d_delivery">Size: 0B | Sent: 0</span></div>
     </div>
@@ -302,6 +302,7 @@
         let ws = null;
         let isCalling = false;
         let isMayaSpeaking = false;
+        let mayaSpeakingWatchdog = null;
         let mediaStream = null;
         let mediaRecorder = null;
         let recordedChunks = [];
@@ -386,7 +387,7 @@
                 stopLiveCall();
             }
         }
-               async function startLiveCall() {
+             async function startLiveCall() {
             try {
                 userInitiatedStop = false;
                 packetsSent = 0;
@@ -519,7 +520,8 @@
                             const blobSize = completeBlob.size;
                             recordedChunks = [];
 
-                            if (blobSize > 1500) {
+                            // Calibrated threshold: 800 bytes captures even short words safely
+                            if (blobSize > 800) {
                                 const reader = new FileReader();
                                 reader.onloadend = () => {
                                     const b64 = reader.result.split(",")[1];
@@ -531,7 +533,7 @@
                                 reader.readAsDataURL(completeBlob);
                             } else {
                                 d_delivery.className = "hud-warn";
-                                d_delivery.innerText = `REJECTED: ${blobSize}B < 1500B`;
+                                d_delivery.innerText = `REJECTED: ${blobSize}B < 800B`;
                             }
                         } else {
                             d_delivery.className = "hud-err";
@@ -540,7 +542,6 @@
                         }
                     };
 
-                    // Timeslice 250ms ensures ondataavailable triggers reliably on mobile drivers
                     mediaRecorder.start(250);
                 }
 
@@ -554,15 +555,15 @@
                     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let currentVol = Math.round(sum / dataArray.length);
 
-                    if (currentVol > 15) {
+                    if (currentVol > 14) {
                         d_vol.className = "hud-good";
                         d_vol.innerText = `Vol: ${currentVol} (Speaking DETECTED)`;
                     } else {
                         d_vol.className = "";
-                        d_vol.innerText = `Vol: ${currentVol} (Threshold: 15)`;
+                        d_vol.innerText = `Vol: ${currentVol} (Threshold: 14)`;
                     }
 
-                    if (currentVol > 15 && !isMayaSpeaking) {
+                    if (currentVol > 14 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true;
                             orb.className = "quantum-orb listening";
@@ -583,7 +584,7 @@
                                     }
                                 }
                             }
-                        }, 800);
+                        }, 750);
                     }
 
                     d_vad.innerText = `Maya: ${isMayaSpeaking ? "SPEAKING" : "IDLE"} | UserRec: ${isUserSpeaking}`;
@@ -607,6 +608,7 @@
             if (!audioQueue.length) {
                 isPlayingQueue = false;
                 isMayaSpeaking = false;
+                clearTimeout(mayaSpeakingWatchdog);
                 orb.className = "quantum-orb";
                 activeSourceNode = null;
                 return;
@@ -615,6 +617,17 @@
             isPlayingQueue = true;
             isMayaSpeaking = true;
             orb.className = "quantum-orb speaking";
+
+            // Safety Deadlock Watchdog: force-resets isMayaSpeaking if audio hangs
+            clearTimeout(mayaSpeakingWatchdog);
+            mayaSpeakingWatchdog = setTimeout(() => {
+                if (isMayaSpeaking) {
+                    console.warn("[AUDIO WATCHDOG] Audio playback timed out. Forcing Maya to IDLE.");
+                    isMayaSpeaking = false;
+                    isPlayingQueue = false;
+                    orb.className = "quantum-orb";
+                }
+            }, 8000);
 
             if (mediaRecorder && mediaRecorder.state === "recording") {
                 try { mediaRecorder.stop(); } catch (_) {}
@@ -635,25 +648,32 @@
                 }
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-                const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer);
+                // Safe Buffer Copy: prevents detachment crashes
+                const safeCopy = bytes.buffer.slice(0);
+                const audioBuffer = await audioCtx.decodeAudioData(safeCopy);
+
                 activeSourceNode = audioCtx.createBufferSource();
                 activeSourceNode.buffer = audioBuffer;
                 activeSourceNode.connect(audioCtx.destination);
 
                 activeSourceNode.onended = () => {
+                    clearTimeout(mayaSpeakingWatchdog);
                     playNextInQueue();
                 };
 
                 activeSourceNode.start(0);
             } catch (decodeErr) {
                 console.error("WebAudio Decode Error:", decodeErr);
-                playNextInQueue();
+                clearTimeout(mayaSpeakingWatchdog);
+                // Safe step-over: skip corrupt chunk without infinite recursion
+                setTimeout(playNextInQueue, 50);
             }
         }
 
         function interruptPlayback() {
             audioQueue = [];
             isPlayingQueue = false;
+            clearTimeout(mayaSpeakingWatchdog);
             if (activeSourceNode) {
                 try { activeSourceNode.stop(); } catch (_) {}
                 activeSourceNode = null;
@@ -684,7 +704,7 @@
             orb.className = "quantum-orb";
 
             d_mic.innerText = "TRACK: OFF";
-            d_vol.innerText = "Vol: 0 (Threshold: 15)";
+            d_vol.innerText = "Vol: 0 (Threshold: 14)";
             d_vad.innerText = "Maya: IDLE | UserRec: false";
 
             closeActionCard();
@@ -702,4 +722,4 @@
         }
     </script>
 </body>
-</html> 
+</html>   
