@@ -54,7 +54,6 @@ STATE_FILE = os.getenv("STATE_FILE_PATH", "maya_state.json")
 CURRENT_ACTIVE_WS: WebSocket | None = None
 _TELEGRAM_USERNAME_CACHE: str | None = None
 
-# Dedicated ThreadPool to prevent thread starvation during Whisper inference
 DEDICATED_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 ROUTER_TIMEOUT_SECONDS = 10
@@ -182,10 +181,11 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
         global CURRENT_ACTIVE_WS
         ws_target = CURRENT_ACTIVE_WS
         if ws_target:
-            await safe_send_json(
-                ws_target,
-                {"type": "task_complete", "task_id": task_id, "success": success, "text": "Boss, बैकग्राउंड टास्क पूरा हो गया है।"}
-            )
+            # FIX: Send as 'reply_text' so HUD processes it, and trigger TTS directly
+            msg = "Boss, बैकग्राउंड टास्क पूरा हो गया है।" if success else "Boss, बैकग्राउंड टास्क में कुछ एरर आ गया है।"
+            await safe_send_json(ws_target, {"type": "reply_text", "text": msg})
+            await stream_neural_speech(ws_target, msg)
+            
     except Exception as exc:
         print(f"[WORKER ERROR] {task_id}: {exc}")
         update_task_status(task_id, "failed", str(exc))
@@ -210,7 +210,6 @@ HALLUCINATION_BLACKLIST = {"thank you", "thanks for watching", "subtitles", "sub
 
 def is_hallucinated_transcript(text: str) -> bool:
     return text.strip().lower().strip(".,!?।") in HALLUCINATION_BLACKLIST
-
 async def master_router(user_input: str) -> Dict[str, Any]:
     user_input = user_input.strip()
     if not user_input:
@@ -222,12 +221,14 @@ async def master_router(user_input: str) -> Dict[str, Any]:
         return {"intent": "switch_telegram", "voice_response": "ठीक है Boss, Telegram मोड पर स्विच कर रही हूँ।", "task_payload": "", "screen_content": ""}
 
     if any(k in clean for k in ["yaad rakh", "yaad rakhna", "remember this", "always remember"]):
-        remember_fact(f"note_{int(time.time())}", user_input, category="boss_instructions")
+        # Minor optimization: asyncio.to_thread for sqlite write
+        await asyncio.to_thread(remember_fact, f"note_{int(time.time())}", user_input, category="boss_instructions")
         return {"intent": "chat", "voice_response": "ठीक है Boss, ये मैंने याद रख लिया।", "task_payload": user_input, "screen_content": ""}
 
-    active_summary = get_active_tasks_summary()
-    known_memory = recall_memory()
+    active_summary = await asyncio.to_thread(get_active_tasks_summary)
+    known_memory = await asyncio.to_thread(recall_memory)
     memory_context = "\n".join(f"- {k}: {v}" for k, v in known_memory.items() if k != "active_model_registry") or "None"
+    
     router_prompt = f"""You are Maya, female AI executive. Answer in Hindi/Hinglish with female grammar (करती हूँ, बताती हूँ).
 Classify into: chat | new_heavy_task | modify_task | generate_image
 MEMORY: {memory_context}
@@ -325,7 +326,6 @@ async def stream_neural_speech(ws: WebSocket, text: str) -> bool:
         if audio_b64:
             delivered = await safe_send_json(ws, {"type": "audio_chunk", "data": audio_b64})
             sent_any = sent_any or delivered
-            # Controlled audio pacing: gives mobile browser time to queue
             await asyncio.sleep(0.08)
     await safe_send_json(ws, {"type": "audio_end"})
     return sent_any
@@ -440,7 +440,8 @@ async def websocket_live_call(ws: WebSocket):
     try:
         welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
         await safe_send_json(ws, {"type": "reply_text", "text": welcome_text})
-        await stream_neural_speech(ws, welcome_text)
+        # FIX: Non-blocking welcome TTS
+        asyncio.create_task(stream_neural_speech(ws, welcome_text))
     except Exception as ge:
         print(f"[WELCOME ERROR] {ge}")
 
@@ -462,20 +463,15 @@ async def websocket_live_call(ws: WebSocket):
             elif msg.get("type") == "audio_blob" and groq_client:
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
-                    
-                    # Safe Threshold: captures natural short greetings
                     if len(wav_bytes) < 600:
                         print(f"[WHISPER DROP]: Blob too small ({len(wav_bytes)} bytes)")
                         continue
 
                     incoming_mime = msg.get("mime", "audio/webm").lower()
                     ext = ".webm"
-                    if "mp4" in incoming_mime:
-                        ext = ".mp4"
-                    elif "ogg" in incoming_mime:
-                        ext = ".ogg"
-                    elif "wav" in incoming_mime:
-                        ext = ".wav"
+                    if "mp4" in incoming_mime: ext = ".mp4"
+                    elif "ogg" in incoming_mime: ext = ".ogg"
+                    elif "wav" in incoming_mime: ext = ".wav"
 
                     audio_file = io.BytesIO(wav_bytes)
                     audio_file.seek(0)
@@ -537,7 +533,8 @@ async def websocket_live_call(ws: WebSocket):
                         voice_msg = "Boss, Telegram अभी उपलब्ध नहीं है।"
 
                 await safe_send_json(ws, {"type": "reply_text", "text": voice_msg})
-                await stream_neural_speech(ws, voice_msg)
+                # FIX: Non-blocking TTS execution to keep WebSocket alive
+                asyncio.create_task(stream_neural_speech(ws, voice_msg))
     except WebSocketDisconnect:
         pass
     except Exception as err:
@@ -545,10 +542,6 @@ async def websocket_live_call(ws: WebSocket):
     finally:
         if CURRENT_ACTIVE_WS == ws:
             CURRENT_ACTIVE_WS = None
-        # FIX: the idle-timeout `break` above left the connection open on the
-        # wire (client never received a close frame). Explicitly close it here
-        # so the browser's onclose fires and the reconnect logic kicks in
-        # instead of the UI silently staying "ONLINE" against a dead socket.
         try:
             if getattr(ws.client_state, "name", "") == "CONNECTED":
                 await ws.close(code=1000, reason="Session ended")
@@ -563,4 +556,3 @@ async def home():
             return f.read()
     return "<h1>Maya Sovereign OS Active</h1>"
 
-            
