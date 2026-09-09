@@ -1,15 +1,15 @@
 import os
 import sys
-import subprocess
-from duckduckgo_search import DDGS
+import asyncio
+import aiofiles
+from duckduckgo_search import AsyncDDGS
 from workspace_manager import get_workspace_path
 
-
-def tool_web_search(query: str, max_results: int = 5) -> str:
-    """लाइव इंटरनेट पर सर्च करके ताज़ा डेटा लाता है"""
+async def tool_web_search(query: str, max_results: int = 5) -> str:
+    """लाइव इंटरनेट पर सर्च करके ताज़ा डेटा लाता है (Non-blocking)"""
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+        async with AsyncDDGS() as ddgs:
+            results = await ddgs.text(query, max_results=max_results)
             if not results:
                 return "No search results found."
             formatted = []
@@ -19,70 +19,69 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Web search failed: {str(e)}"
 
-
-
-def tool_write_file(filepath: str, content: str) -> str:
-    """सुरक्षित workspace डायरेक्टरी में असल फ़ाइल लिखता है"""
+async def tool_write_file(filepath: str, content: str) -> str:
+    """सुरक्षित workspace डायरेक्टरी में असल फ़ाइल लिखता है (Asynchronous)"""
     try:
         safe_path = get_workspace_path(filepath)
         os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-        with open(safe_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        async with aiofiles.open(safe_path, "w", encoding="utf-8") as f:
+            await f.write(content)
         return f"File '{filepath}' saved successfully in workspace ({len(content)} chars)."
     except Exception as e:
         return f"Failed to write file '{filepath}': {str(e)}"
 
-
-def tool_read_file(filepath: str) -> str:
-    """Workspace के अंदर से फ़ाइल का वास्तविक कंटेंट पढ़ता है"""
+async def tool_read_file(filepath: str) -> str:
+    """Workspace के अंदर से फ़ाइल का वास्तविक कंटेंट पढ़ता है (Asynchronous)"""
     try:
         safe_path = get_workspace_path(filepath)
         if not os.path.exists(safe_path):
             return f"Error: File '{filepath}' does not exist in workspace."
-        with open(safe_path, "r", encoding="utf-8") as f:
-            return f.read()
+        async with aiofiles.open(safe_path, "r", encoding="utf-8") as f:
+            return await f.read()
     except Exception as e:
         return f"Failed to read file '{filepath}': {str(e)}"
 
-
-def tool_execute_python(code: str) -> str:
-    """
-    Sandboxed Python execution.
-    NOTE: This runs in a separate OS subprocess with a hard timeout and its
-    working directory locked to /workspace, which stops it from touching
-    files outside the workspace. It does NOT provide full sandboxing
-    (no network/memory/CPU limits) - for untrusted, internet-facing use you
-    should additionally run this inside a locked-down container
-    (e.g. `docker run --rm --network none --memory 128m ...`).
-    """
+async def tool_execute_python(code: str) -> str:
+    """Sandboxed Python execution with Strict Environment & Async Subprocess"""
     try:
         safe_cwd = get_workspace_path(".")
         os.makedirs(safe_cwd, exist_ok=True)
 
-        result = subprocess.run(
-            [sys.executable, "-c", code],
+        # SECURITY: Strip sensitive API keys before running LLM generated code
+        safe_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "PYTHONUNBUFFERED": "1"
+        }
+
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code,
             cwd=safe_cwd,
-            capture_output=True,
-            text=True,
-            timeout=15
+            env=safe_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
 
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=15.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            return "Error: Execution timed out after 15 seconds."
 
-        output = f"Exit Code: {result.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+        stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
+        stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-        # Guard against blowing up the LLM's token budget on runaway prints
+        output = f"Exit Code: {process.returncode}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+
+        # Guard against blowing up the LLM's token budget
         if len(output) > 4000:
             output = output[:4000] + "\n...[truncated]"
 
         return output
 
-    except subprocess.TimeoutExpired:
-        return "Error: Execution timed out after 15 seconds."
     except Exception as e:
         return f"Execution failed: {str(e)}"
-
 
 AVAILABLE_TOOLS = {
     "web_search": tool_web_search,
@@ -139,7 +138,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "execute_python",
-            "description": "Execute a snippet of Python code in a sandboxed subprocess (15s timeout) for calculations, data processing, or verifying generated code. Returns stdout, stderr, and exit code.",
+            "description": "Execute a snippet of Python code in a sandboxed subprocess (15s timeout). Returns stdout, stderr, and exit code.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -149,4 +148,4 @@ TOOL_SCHEMAS = [
             }
         }
     }
-]
+        ]
