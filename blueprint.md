@@ -8,6 +8,7 @@
 
 ---
 
+
 ## 2. Hardware-Verified Model Registry
 Only models with confirmed 100% inference success on verified API credentials are permitted:
 
