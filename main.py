@@ -6,6 +6,7 @@ import json
 import base64
 import asyncio
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
 
 import httpx
@@ -15,7 +16,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from groq import Groq
 from google import genai
-
 
 from telegram import Update
 from telegram.ext import (
@@ -53,6 +53,9 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY, http_options={"api_version"
 STATE_FILE = os.getenv("STATE_FILE_PATH", "maya_state.json")
 CURRENT_ACTIVE_WS: WebSocket | None = None
 _TELEGRAM_USERNAME_CACHE: str | None = None
+
+# Dedicated ThreadPool to prevent thread starvation during Whisper inference
+DEDICATED_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 ROUTER_TIMEOUT_SECONDS = 10
 WHISPER_TIMEOUT_SECONDS = 15
@@ -176,7 +179,6 @@ async def run_autonomous_worker(task_id: str, initial_prompt: str):
             except Exception as exc:
                 print(f"[ARTIFACT ERROR] {exc}")
         
-        # Dynamic Resolution: protects against socket reconnection races
         global CURRENT_ACTIVE_WS
         ws_target = CURRENT_ACTIVE_WS
         if ws_target:
@@ -239,7 +241,7 @@ Return ONLY JSON: {{"intent": "chat", "voice_response": "one crisp Hindi sentenc
             loop = asyncio.get_running_loop()
             resp = await asyncio.wait_for(
                 loop.run_in_executor(
-                    None,
+                    DEDICATED_EXECUTOR,
                     lambda: groq_client.chat.completions.create(
                         model="openai/gpt-oss-20b",
                         messages=[{"role": "system", "content": "Return JSON only."}, {"role": "user", "content": router_prompt}],
@@ -323,6 +325,8 @@ async def stream_neural_speech(ws: WebSocket, text: str) -> bool:
         if audio_b64:
             delivered = await safe_send_json(ws, {"type": "audio_chunk", "data": audio_b64})
             sent_any = sent_any or delivered
+            # Controlled audio pacing: gives mobile browser time to queue
+            await asyncio.sleep(0.08)
     await safe_send_json(ws, {"type": "audio_end"})
     return sent_any
 
@@ -445,6 +449,7 @@ async def websocket_live_call(ws: WebSocket):
             try:
                 data = await asyncio.wait_for(ws.receive_text(), timeout=WS_IDLE_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
+                print("[WS IDLE TIMEOUT] Closing idle connection")
                 break
             msg = json.loads(data)
             if msg.get("type") == "ping":
@@ -458,8 +463,8 @@ async def websocket_live_call(ws: WebSocket):
                 try:
                     wav_bytes = base64.b64decode(msg.get("data", ""))
                     
-                    # Calibrated server gate: 800 bytes captures valid short phrases
-                    if len(wav_bytes) < 800:
+                    # Safe Threshold: captures natural short greetings
+                    if len(wav_bytes) < 600:
                         print(f"[WHISPER DROP]: Blob too small ({len(wav_bytes)} bytes)")
                         continue
 
@@ -473,11 +478,13 @@ async def websocket_live_call(ws: WebSocket):
                         ext = ".wav"
 
                     audio_file = io.BytesIO(wav_bytes)
+                    audio_file.seek(0)
                     audio_file.name = f"audio{ext}"
+                    
                     loop = asyncio.get_running_loop()
                     transcription = await asyncio.wait_for(
                         loop.run_in_executor(
-                            None,
+                            DEDICATED_EXECUTOR,
                             lambda: groq_client.audio.transcriptions.create(
                                 file=audio_file,
                                 model="whisper-large-v3-turbo",
@@ -538,6 +545,15 @@ async def websocket_live_call(ws: WebSocket):
     finally:
         if CURRENT_ACTIVE_WS == ws:
             CURRENT_ACTIVE_WS = None
+        # FIX: the idle-timeout `break` above left the connection open on the
+        # wire (client never received a close frame). Explicitly close it here
+        # so the browser's onclose fires and the reconnect logic kicks in
+        # instead of the UI silently staying "ONLINE" against a dead socket.
+        try:
+            if getattr(ws.client_state, "name", "") == "CONNECTED":
+                await ws.close(code=1000, reason="Session ended")
+        except Exception as close_exc:
+            print(f"[WS CLOSE ERROR] {close_exc}")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -546,3 +562,5 @@ async def home():
         with open(html_path, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>Maya Sovereign OS Active</h1>"
+
+            
