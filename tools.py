@@ -20,6 +20,7 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
         return f"Web search failed: {str(e)}"
 
 
+
 def tool_write_file(filepath: str, content: str) -> str:
     """सुरक्षित workspace डायरेक्टरी में असल फ़ाइल लिखता है"""
     try:
