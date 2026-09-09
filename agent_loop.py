@@ -55,7 +55,7 @@ async def call_llm_safe(messages: List[Dict[str, Any]]) -> Any:
 
     if gemini_client:
         try:
-            # FIX 1: Safe dict access using .get() to prevent TypeErrors
+            # Safe dict access using .get() to prevent TypeErrors
             prompt_text = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages])
             prompt_text += (
                 "\n\n[SYSTEM NOTE: You are running in fallback mode with NO tool access. "
@@ -97,7 +97,7 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
             print(f"[REACT ENGINE] Finished at turn {turn + 1}")
             return final_ans or "Task completed."
 
-        # FIX 2: Convert SDK Object to Pure Dictionary to prevent cross-SDK crashes
+        # Convert SDK Object to Pure Dictionary to prevent cross-SDK crashes
         assistant_msg = {"role": "assistant", "content": final_ans}
         
         formatted_tool_calls = []
@@ -125,7 +125,8 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
 
             if fn_name in AVAILABLE_TOOLS:
                 try:
-                    observation = AVAILABLE_TOOLS[fn_name](**fn_args)
+                    # FIX: Await added here for asynchronous tool execution
+                    observation = await AVAILABLE_TOOLS[fn_name](**fn_args)
                 except Exception as e:
                     observation = f"Tool Execution Failed: {str(e)}"
             else:
@@ -141,4 +142,4 @@ async def run_react_agent(task_description: str, max_turns: int = 5) -> str:
     return (
         "Boss, task ज़्यादा complex निकला और तय turns में पूरा नहीं हो पाया। "
         "कृपया task को छोटे हिस्सों में तोड़कर दोबारा भेजें।"
-    )
+)
