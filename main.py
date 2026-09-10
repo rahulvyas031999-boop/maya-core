@@ -246,7 +246,7 @@ Return ONLY JSON: {{"intent": "chat", "voice_response": "one crisp Hindi sentenc
                         model="openai/gpt-oss-20b",
                         messages=[{"role": "system", "content": "Return JSON only."}, {"role": "user", "content": router_prompt}],
                         response_format={"type": "json_object"},
-                        max_tokens=800  # FIX: 300 se 800 kar diya gaya taki JSON error/crash na ho
+                        max_tokens=800
                     )
                 ),
                 timeout=ROUTER_TIMEOUT_SECONDS
