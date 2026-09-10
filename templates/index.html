@@ -117,79 +117,19 @@
         	from { transform: scale(1); filter: brightness(1); }
         	to { transform: scale(1.2); filter: brightness(1.3); }
     	}
-    	#actionCard {
-        	position: absolute;
-        	z-index: 15;
-        	width: 90%;
-        	background: var(--glass);
-        	border: 1px solid var(--border);
-        	border-radius: 12px;
-        	padding: 8px;
-        	display: none;
-        	flex-direction: column;
-        	align-items: center;
-        	gap: 6px;
-    	}
-    	#actionCard img {
-        	width: 100%;
-        	border-radius: 8px;
-        	max-height: 200px;
-        	object-fit: cover;
-    	}
-    	.action-btns { display: flex; gap: 8px; width: 100%; }
-    	.holo-btn {
-        	flex: 1;
-        	font-family: 'Orbitron', sans-serif;
-        	font-size: 0.65rem;
-        	background: rgba(0, 243, 255, 0.15);
-        	color: var(--cyan);
-        	padding: 6px;
-        	border-radius: 6px;
-        	text-align: center;
-        	text-decoration: none;
-        	border: 1px solid var(--cyan);
-        	cursor: pointer;
-    	}
-    	.close-btn { background: rgba(255, 0, 85, 0.15); color: var(--red); border-color: var(--red); }
-    	#telegramFallback {
-        	width: 100%;
-        	max-width: 480px;
-        	background: var(--glass);
-        	border: 1px solid rgba(255, 200, 0, 0.4);
-        	border-radius: 12px;
-        	padding: 10px 14px;
-        	display: none;
-        	flex-direction: column;
-        	align-items: center;
-        	gap: 8px;
-        	margin-bottom: 8px;
-    	}
-    	#telegramFallback p {
-        	font-size: 0.8rem;
-        	color: #ffd166;
-        	text-align: center;
-        	font-weight: 600;
-    	}
-    	.fallback-btns { display: flex; gap: 8px; width: 100%; }
-    	.telegram-btn {
-        	background: rgba(255, 209, 102, 0.15);
-        	color: #ffd166;
-        	border-color: #ffd166;
-    	}
     	#controls {
         	width: 100%;
         	max-width: 480px;
         	background: var(--glass);
-        	padding: 10px 14px;
+        	padding: 12px 14px;
         	border-radius: 14px;
         	border: 1px solid var(--border);
         	display: flex;
         	flex-direction: column;
         	align-items: center;
-        	gap: 8px;
+        	gap: 12px;
     	}
-    	
-        /* NEW DUAL-LINE UI CSS */
+        /* DUAL-LINE UI CSS */
         #statusLabel {
             font-size: 0.88rem;
             font-weight: 600;
@@ -202,17 +142,23 @@
             gap: 3px;
             line-height: 1.2;
         }
-        .boss-text { color: #00ffcc; font-size: 0.75rem; opacity: 0.9; }
-        .maya-text { color: #d1e8ff; font-size: 0.9rem; }
+        .boss-text { color: #00ffcc; font-size: 0.85rem; font-style: italic; }
+        .maya-text { color: #d1e8ff; font-size: 0.95rem; }
         
-    	.btn-row { display: flex; align-items: center; gap: 16px; }
+    	.btn-row { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; /* FIXED: Centers both buttons */
+            gap: 20px; 
+            width: 100%;
+        }
     	.round-btn {
-        	width: 58px; height: 58px;
+        	width: 65px; height: 65px;
         	border-radius: 50%;
         	border: 2px solid #00ffcc;
         	background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
         	color: #030611;
-        	font-size: 1.5rem;
+        	font-size: 1.8rem;
         	cursor: pointer;
         	box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
         	display: flex; align-items: center; justify-content: center;
@@ -223,14 +169,15 @@
         	border-color: var(--red);
     	}
     	.stop-btn {
-        	width: 44px; height: 44px;
+        	width: 50px; height: 50px;
         	border-radius: 50%;
-        	border: 1px solid var(--red);
+        	border: 2px solid var(--red);
         	background: rgba(255, 0, 85, 0.2);
         	color: var(--red);
-        	font-size: 1rem;
+        	font-size: 1.2rem;
         	cursor: pointer;
         	display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 15px rgba(255, 0, 85, 0.3);
         }
     	#diagnosticHUD {
         	position: fixed;
@@ -252,26 +199,21 @@
         	pointer-events: none;
     	}
     	.hud-row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 2px 0; }
-    	.hud-warn { color: #ffd166; font-weight: bold; }
     	.hud-err { color: #ff0055; font-weight: bold; }
     	.hud-good { color: #00ffcc; font-weight: bold; }
 	</style>
 </head>
 <body>
 	<div id="diagnosticHUD">
-    	<div class="hud-row"><span>AUDIO TELEMETRY</span><span id="d_ws" class="hud-err">WS: DISCONNECTED</span></div>
-    	<div class="hud-row"><span>MIC HARDWARE:</span><span id="d_mic">TRACK: OFF</span></div>
-    	<div class="hud-row"><span>LIVE ENERGY:</span><span id="d_vol">Vol: 0 (Threshold: 12)</span></div>
-    	<div class="hud-row"><span>VAD STATE:</span><span id="d_vad">Maya: IDLE | UserRec: false</span></div>
-    	<div class="hud-row"><span>DATA PIPE:</span><span id="d_delivery">Size: 0B | Sent: 0</span></div>
+    	<div class="hud-row"><span>AUDIO</span><span id="d_ws" class="hud-err">DISCONNECTED</span></div>
+    	<div class="hud-row"><span>MIC</span><span id="d_mic">OFF</span></div>
+    	<div class="hud-row"><span>VAD</span><span id="d_vad">IDLE</span></div>
+    	<div class="hud-row"><span>PIPE</span><span id="d_delivery">0B</span></div>
 	</div>
 
 	<header>
     	<div class="hud-title">MAYA <span style="color:var(--cyan); font-size:0.7rem;">SOVEREIGN OS</span></div>
-    	<div class="hud-badge">
-        	<div class="hud-dot"></div>
-        	<span id="connectionState">OFFLINE</span>
-    	</div>
+    	<div class="hud-badge"><div class="hud-dot"></div><span id="connectionState">OFFLINE</span></div>
 	</header>
 
 	<div id="mainStage">
@@ -279,21 +221,6 @@
         	<div class="ring ring-1"></div>
         	<div class="ring ring-2"></div>
         	<div id="orb" class="quantum-orb"></div>
-    	</div>
-    	<div id="actionCard">
-        	<img id="cardImage" src="" alt="Projection" />
-        	<div class="action-btns">
-            	<a id="downloadBtn" href="" target="_blank" class="holo-btn">⬇️ DOWNLOAD</a>
-            	<button onclick="closeActionCard()" class="holo-btn close-btn">❌ HATAO</button>
-        	</div>
-    	</div>
-	</div>
-
-	<div id="telegramFallback">
-    	<p>⚠️ नेटवर्क धीमा है। Telegram पर जारी रखें?</p>
-    	<div class="fallback-btns">
-        	<a id="telegramLinkBtn" href="#" target="_blank" class="holo-btn telegram-btn">💬 TELEGRAM MODE</a>
-        	<button onclick="dismissTelegramFallback()" class="holo-btn close-btn">❌ रहने दो</button>
     	</div>
 	</div>
 
@@ -309,68 +236,29 @@
     	let ws = null;
     	let isCalling = false;
     	let isMayaSpeaking = false;
-    	let mayaSpeakingWatchdog = null;
     	let mediaStream = null;
     	let mediaRecorder = null;
     	let recordedChunks = [];
     	let packetsSent = 0;
-    	let userInitiatedStop = false;
-
-    	let reconnectAttempts = 0;
-    	const MAX_RECONNECT_ATTEMPTS = 5;
-
+    	
     	let audioCtx = null;
     	let analyser = null;
-    	let micSource = null;
     	let animFrameId = null;
     	let isUserSpeaking = false;
     	let silenceTimer = null;
-
-    	let heartbeatInterval = null;
-    	let heartbeatTimeout = null;
-    	let lastPingSentAt = 0;
+    	let dummyOscillator = null; // To keep hardware active
 
     	let audioQueue = [];
     	let isPlayingQueue = false;
     	let activeAudio = null;
 
-    	let telegramLink = null;
-    	let weakNetworkTimer = null;
-    	let fallbackDismissedThisSpell = false;
-    	const WEAK_NETWORK_FALLBACK_DELAY = 6000;
-
     	const orb = document.getElementById("orb");
     	const statusLabel = document.getElementById("statusLabel");
-    	const actionCard = document.getElementById("actionCard");
-    	const cardImage = document.getElementById("cardImage");
-    	const downloadBtn = document.getElementById("downloadBtn");
-    	const connectionState = document.getElementById("connectionState");
-    	const telegramFallback = document.getElementById("telegramFallback");
-    	const telegramLinkBtn = document.getElementById("telegramLinkBtn");
-    	const hudDot = document.querySelector(".hud-dot");
-
     	const d_ws = document.getElementById("d_ws");
     	const d_mic = document.getElementById("d_mic");
-    	const d_vol = document.getElementById("d_vol");
     	const d_vad = document.getElementById("d_vad");
     	const d_delivery = document.getElementById("d_delivery");
 
-    	fetch("/telegram-link").then(r => r.json()).then(d => { telegramLink = d.url; }).catch(() => {});
-
-    	function maybeShowTelegramFallback() {
-        	if (!telegramLink || fallbackDismissedThisSpell) return;
-        	telegramLinkBtn.href = telegramLink;
-        	telegramFallback.style.display = "flex";
-    	}
-    	function dismissTelegramFallback() {
-        	fallbackDismissedThisSpell = true;
-        	telegramFallback.style.display = "none";
-    	}
-    	function hideTelegramFallback() { telegramFallback.style.display = "none"; }
-
-    	const CONNECTION_COLORS = { "ONLINE": "#00f3ff", "WEAK SIGNAL": "#ffd166", "RECONNECTING": "#ff9f1c", "OFFLINE": "#5a6472" };
-    	
-        // NEW SMART UI FUNCTION FOR DUAL TEXT DISPLAY
         let lastBossText = "";
         function setStatus(text, type = "system") {
             if (type === "boss") {
@@ -383,233 +271,100 @@
                     statusLabel.innerHTML = `<span class="maya-text">${text}</span>`;
                 }
             } else {
-                lastBossText = ""; // Clear on system message
                 statusLabel.innerHTML = `<span class="maya-text">${text}</span>`;
             }
         }
-        
-    	function setConnection(text) {
-        	connectionState.innerText = text;
-        	const color = CONNECTION_COLORS[text] || CONNECTION_COLORS.ONLINE;
-        	hudDot.style.background = color;
-        	hudDot.style.boxShadow = `0 0 8px ${color}`;
-        	if (text === "WEAK SIGNAL" || text === "RECONNECTING") {
-            	if (!weakNetworkTimer) weakNetworkTimer = setTimeout(maybeShowTelegramFallback, WEAK_NETWORK_FALLBACK_DELAY);
-        	} else {
-            	clearTimeout(weakNetworkTimer);
-            	weakNetworkTimer = null;
-            	if (text === "ONLINE" || text === "OFFLINE") { fallbackDismissedThisSpell = false; hideTelegramFallback(); }
-        	}
-    	}
-    	setConnection("OFFLINE");
-
-    	function getReconnectDelay(attempt) { return Math.min(1000 * Math.pow(2, attempt), 15000); }
 
     	async function toggleCall() {
-        	if (!isCalling) {
-            	await startLiveCall();
-        	} else {
-            	stopLiveCall();
-        	}
+        	if (!isCalling) { await startLiveCall(); } 
+            else { stopLiveCall(); }
     	}
 
     	async function startLiveCall() {
         	try {
-            	userInitiatedStop = false;
             	packetsSent = 0;
-            	d_ws.className = "hud-warn";
-            	d_ws.innerText = "WS: CONNECTING...";
-
+            	d_ws.className = "hud-warn"; d_ws.innerText = "CONNECTING...";
             	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             	ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
 
             	ws.onopen = async () => {
                 	isCalling = true;
-                	reconnectAttempts = 0;
-                	setConnection("ONLINE");
-                	d_ws.className = "hud-good";
-                	d_ws.innerText = "WS: LIVE (200 OK)";
+                	d_ws.className = "hud-good"; d_ws.innerText = "LIVE (200 OK)";
                 	document.getElementById("callToggle").classList.add("active");
                 	document.getElementById("callToggle").innerText = "🛑";
-                	setStatus("लाइव कनेक्शन तैयार // बोलिए Boss...");
-                	startHeartbeat();
+                	setStatus("कनेक्टेड। Boss, मैं सुन रही हूँ...", "system");
                 	await initHardwareAudio();
             	};
 
             	ws.onmessage = (event) => {
                 	try {
                     	const msg = JSON.parse(event.data);
-                    	if (msg.type === "audio_chunk" || msg.type === "audio") {
-                        	enqueueAudioChunk(msg.data);
-                    	} else if (msg.type === "transcript") {
-                            // UI FIX: Pass "boss" type
-                        	setStatus(`Boss: "${msg.text}"`, "boss");
-                    	} else if (msg.type === "reply_text") {
-                            // UI FIX: Pass "maya" type
-                        	setStatus(`Maya: "${msg.text}"`, "maya");
-                    	} else if (msg.type === "image") {
-                        	showActionImage(msg.url);
-                    	} else if (msg.type === "pong") {
-                        	clearTimeout(heartbeatTimeout);
-                    	}
-                	} catch (error) { console.error("Parse error:", error); }
+                    	if (msg.type === "audio_chunk") { enqueueAudioChunk(msg.data); } 
+                        else if (msg.type === "transcript") { setStatus(`Boss: "${msg.text}"`, "boss"); } 
+                        else if (msg.type === "reply_text") { setStatus(`Maya: "${msg.text}"`, "maya"); }
+                        else if (msg.type === "system") { setStatus(msg.text, "system"); }
+                	} catch (error) {}
             	};
-
-            	ws.onclose = () => {
-                	stopHeartbeat();
-                	d_ws.className = "hud-err";
-                	d_ws.innerText = "WS: CLOSED";
-                	if (!userInitiatedStop && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                    	reconnectAttempts++;
-                    	setConnection("RECONNECTING");
-                    	setTimeout(() => { if (!userInitiatedStop) startLiveCall(); }, getReconnectDelay(reconnectAttempts));
-                	} else {
-                    	stopLiveCall();
-                	}
-            	};
-            	ws.onerror = () => { setStatus("कनेक्शन एरर"); };
-        	} catch (error) {
-            	console.error(error);
-            	stopLiveCall();
-        	}
+            	ws.onclose = () => { stopLiveCall(); };
+        	} catch (error) { stopLiveCall(); }
     	}
 
-    	function startHeartbeat() {
-        	stopHeartbeat();
-        	heartbeatInterval = setInterval(() => {
-            	if (ws && ws.readyState === WebSocket.OPEN) {
-                	lastPingSentAt = Date.now();
-                	ws.send(JSON.stringify({ type: "ping", ts: lastPingSentAt }));
-                	clearTimeout(heartbeatTimeout);
-                	heartbeatTimeout = setTimeout(() => { setConnection("WEAK SIGNAL"); }, 8000);
-            	}
-        	}, 15000);
-    	}
-
-    	function stopHeartbeat() {
-        	clearInterval(heartbeatInterval);
-        	clearTimeout(heartbeatTimeout);
-    	}
-
-        // --- NEW FIX: DYNAMIC MEDIA RECORDER INJECTION (Zero-Bytes Bug Fix) ---
         function startFreshRecording() {
-            if (mediaRecorder && mediaRecorder.state !== "inactive") {
-                try { mediaRecorder.stop(); } catch(e){}
-            }
+            if (mediaRecorder && mediaRecorder.state !== "inactive") { try { mediaRecorder.stop(); } catch(e){} }
             recordedChunks = [];
+            try { mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" }); } 
+            catch (e) { mediaRecorder = new MediaRecorder(mediaStream); }
             
-            try {
-                mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
-            } catch (e) {
-                mediaRecorder = new MediaRecorder(mediaStream);
-            }
-            
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) { 
-                    recordedChunks.push(e.data); 
-                }
-            };
-            
+            mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
             mediaRecorder.onstop = () => {
                 if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
                     const completeBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
                     const blobSize = completeBlob.size;
                     recordedChunks = [];
-
-                    if (blobSize === 0) {
-                        d_delivery.className = "hud-err";
-                        d_delivery.innerText = "FAIL: ENCODER_STALL (0 Bytes)";
-                        return;
-                    }
                     if (blobSize > 600) {
                         const reader = new FileReader();
                         reader.onloadend = () => {
-                            const b64 = reader.result.split(",")[1];
-                            ws.send(JSON.stringify({ type: "audio_blob", mime: completeBlob.type, data: b64 }));
+                            ws.send(JSON.stringify({ type: "audio_blob", mime: completeBlob.type, data: reader.result.split(",")[1] }));
                             packetsSent++;
-                            d_delivery.className = "hud-good";
-                            d_delivery.innerText = `DELIVERED: ${blobSize}B | Sent: ${packetsSent}`;
+                            d_delivery.className = "hud-good"; d_delivery.innerText = `${blobSize}B | SENT: ${packetsSent}`;
                         };
                         reader.readAsDataURL(completeBlob);
-                    } else {
-                        d_delivery.className = "hud-warn"; 
-                        d_delivery.innerText = `REJECTED: ${blobSize}B < 600B`;
                     }
-                } else {
-                    d_delivery.className = "hud-err"; 
-                    d_delivery.innerText = "FAIL: ZERO_BYTES_CAPTURED";
-                    recordedChunks = [];
                 }
             };
-            
             try { mediaRecorder.start(); } catch(e){}
         }
 
     	async function initHardwareAudio() {
         	try {
-            	if (animFrameId) {
-                	cancelAnimationFrame(animFrameId);
-                	animFrameId = null;
-            	}
+            	mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            	d_mic.className = "hud-good"; d_mic.innerText = `READY`;
 
-            	if (mediaStream) {
-                	mediaStream.getTracks().forEach(t => t.stop());
-            	}
-
-            	mediaStream = await navigator.mediaDevices.getUserMedia({
-                	audio: {
-                    	echoCancellation: true,
-                    	noiseSuppression: true,
-                    	autoGainControl: true
-                	}
-            	});
-
-            	const track = mediaStream.getAudioTracks()[0];
-            	d_mic.className = "hud-good";
-            	d_mic.innerText = `READY | Live: ${track.readyState}`;
-
-            	track.onmute = () => {
-                	d_mic.className = "hud-err";
-                	d_mic.innerText = "ALERT: MIC MUTED BY OS!";
-            	};
-            	track.onunmute = () => {
-                	d_mic.className = "hud-good";
-                	d_mic.innerText = "TRACK: ACTIVE";
-            	};
-
-            	if (!audioCtx) {
-                	audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            	}
+            	audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             	if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            	analyser = audioCtx.createAnalyser();
-            	analyser.fftSize = 256;
-            	micSource = audioCtx.createMediaStreamSource(mediaStream);
+                // HACK: Silent Oscillator keeps Android Audio Focus alive for the Mic
+                dummyOscillator = audioCtx.createOscillator();
+                let gainNode = audioCtx.createGain();
+                gainNode.gain.value = 0; // Pure silence
+                dummyOscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                dummyOscillator.start();
+
+            	analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
+            	let micSource = audioCtx.createMediaStreamSource(mediaStream);
             	micSource.connect(analyser);
 
             	const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
             	function monitorVAD() {
                 	if (!isCalling) return;
                 	analyser.getByteFrequencyData(dataArray);
-
-                	let sum = 0;
-                	for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                	let sum = 0; for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                 	let currentVol = Math.round(sum / dataArray.length);
-
-                	if (currentVol > 12) {
-                    	d_vol.className = "hud-good";
-                    	d_vol.innerText = `Vol: ${currentVol} (Speaking DETECTED)`;
-                	} else {
-                    	d_vol.className = "";
-                    	d_vol.innerText = `Vol: ${currentVol} (Threshold: 12)`;
-                	}
 
                 	if (currentVol > 12 && !isMayaSpeaking) {
                     	if (!isUserSpeaking) {
-                        	isUserSpeaking = true;
-                        	orb.className = "quantum-orb listening";
-                            
+                        	isUserSpeaking = true; orb.className = "quantum-orb listening";
                             startFreshRecording(); 
                     	}
                     	clearTimeout(silenceTimer);
@@ -617,129 +372,49 @@
                     	clearTimeout(silenceTimer);
                     	silenceTimer = setTimeout(() => {
                         	if (isUserSpeaking) {
-                            	isUserSpeaking = false;
-                            	orb.className = "quantum-orb";
-                            	if (mediaRecorder && mediaRecorder.state === "recording") {
-                                	try { mediaRecorder.stop(); } catch(e){}
-                            	}
+                            	isUserSpeaking = false; orb.className = "quantum-orb";
+                            	if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch(e){} }
                         	}
                     	}, 900);
                 	}
-
-                	d_vad.innerText = `Maya: ${isMayaSpeaking ? "SPEAKING" : "IDLE"} | UserRec: ${isUserSpeaking}`;
+                	d_vad.innerText = isMayaSpeaking ? "SPEAKING" : (isUserSpeaking ? "RECORDING" : "IDLE");
                 	animFrameId = requestAnimationFrame(monitorVAD);
             	}
-
             	monitorVAD();
-        	} catch (err) {
-            	console.error("Mic init error:", err);
-            	d_mic.className = "hud-err";
-            	d_mic.innerText = `FAIL: ${err.name}`;
-        	}
+        	} catch (err) { d_mic.className = "hud-err"; d_mic.innerText = `FAIL`; }
     	}
 
-    	function enqueueAudioChunk(base64Data) {
-        	audioQueue.push(base64Data);
-        	if (!isPlayingQueue) playNextInQueue();
-    	}
-
+    	function enqueueAudioChunk(base64Data) { audioQueue.push(base64Data); if (!isPlayingQueue) playNextInQueue(); }
     	function playNextInQueue() {
         	if (!audioQueue.length) {
-            	isPlayingQueue = false;
-            	isMayaSpeaking = false;
-            	clearTimeout(mayaSpeakingWatchdog);
-            	orb.className = "quantum-orb";
-            	activeAudio = null;
-            	return;
+            	isPlayingQueue = false; isMayaSpeaking = false; orb.className = "quantum-orb"; activeAudio = null; return;
         	}
-
-        	isPlayingQueue = true;
-        	isMayaSpeaking = true;
-        	orb.className = "quantum-orb speaking";
-
-        	clearTimeout(mayaSpeakingWatchdog);
-        	mayaSpeakingWatchdog = setTimeout(() => {
-            	if (isMayaSpeaking) {
-                	isMayaSpeaking = false;
-                	isPlayingQueue = false;
-                	orb.className = "quantum-orb";
-            	}
-        	}, 8000);
-
-        	if (mediaRecorder && mediaRecorder.state === "recording") {
-            	try { mediaRecorder.stop(); } catch (_) {}
-        	}
+        	isPlayingQueue = true; isMayaSpeaking = true; orb.className = "quantum-orb speaking";
+        	if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (_) {} }
         	isUserSpeaking = false;
-
-        	const nextChunk = audioQueue.shift();
-        	activeAudio = new Audio("data:audio/mp3;base64," + nextChunk);
-
-        	activeAudio.onended = () => {
-            	clearTimeout(mayaSpeakingWatchdog);
-            	playNextInQueue();
-        	};
-
-        	activeAudio.onerror = () => {
-            	clearTimeout(mayaSpeakingWatchdog);
-            	setTimeout(playNextInQueue, 50);
-        	};
-
-        	activeAudio.play().catch(() => {
-            	clearTimeout(mayaSpeakingWatchdog);
-            	setTimeout(playNextInQueue, 50);
-        	});
+        	activeAudio = new Audio("data:audio/mp3;base64," + audioQueue.shift());
+        	activeAudio.onended = () => { playNextInQueue(); };
+        	activeAudio.onerror = () => { setTimeout(playNextInQueue, 50); };
+        	activeAudio.play().catch(() => { setTimeout(playNextInQueue, 50); });
     	}
 
     	function interruptPlayback() {
-        	audioQueue = [];
-        	isPlayingQueue = false;
-        	clearTimeout(mayaSpeakingWatchdog);
-        	if (activeAudio) {
-            	try { activeAudio.pause(); } catch (_) {}
-            	activeAudio = null;
-        	}
-        	isMayaSpeaking = false;
-        	orb.className = "quantum-orb";
-    	}
-
-    	function showActionImage(url) {
-        	actionCard.style.display = "flex";
-        	cardImage.src = url;
-        	downloadBtn.href = url;
-    	}
-
-    	function closeActionCard() {
-        	actionCard.style.display = "none";
-        	cardImage.src = "";
+        	audioQueue = []; isPlayingQueue = false;
+        	if (activeAudio) { try { activeAudio.pause(); } catch (_) {} activeAudio = null; }
+        	isMayaSpeaking = false; orb.className = "quantum-orb";
     	}
 
     	function stopLiveCall() {
-        	userInitiatedStop = true;
-        	interruptPlayback();
-        	isCalling = false;
-        	setConnection("OFFLINE");
+        	interruptPlayback(); isCalling = false;
         	document.getElementById("callToggle").classList.remove("active");
         	document.getElementById("callToggle").innerText = "📞";
         	setStatus("कॉल समाप्त // बात करने के लिए टैप करें");
         	orb.className = "quantum-orb";
-
-        	d_mic.innerText = "TRACK: OFF";
-        	d_vol.innerText = "Vol: 0 (Threshold: 12)";
-        	d_vad.innerText = "Maya: IDLE | UserRec: false";
-
-        	closeActionCard();
-        	stopHeartbeat();
+            if (dummyOscillator) { try { dummyOscillator.stop(); } catch(e){} }
         	if (animFrameId) cancelAnimationFrame(animFrameId);
-        	animFrameId = null;
-        	clearTimeout(silenceTimer);
-
-        	if (mediaRecorder && mediaRecorder.state !== "inactive") {
-            	try { mediaRecorder.stop(); } catch (_) {}
-        	}
-        	mediaRecorder = null;
+        	if (mediaRecorder && mediaRecorder.state !== "inactive") { try { mediaRecorder.stop(); } catch (_) {} }
         	if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-        	if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-        	ws = null;
+        	if (ws && ws.readyState === WebSocket.OPEN) ws.close(); ws = null;
     	}
 	</script>
 </body>
