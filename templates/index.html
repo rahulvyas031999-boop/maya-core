@@ -7,208 +7,43 @@
 	<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
 	<style>
     	:root {
-        	--cyan: #00f3ff;
-        	--purple: #9d4edd;
-        	--red: #ff0055;
-        	--dark: #030612;
-        	--glass: rgba(6, 12, 28, 0.90);
-        	--border: rgba(0, 243, 255, 0.25);
+        	--cyan: #00f3ff; --purple: #9d4edd; --red: #ff0055;
+        	--dark: #030612; --glass: rgba(6, 12, 28, 0.90); --border: rgba(0, 243, 255, 0.25);
     	}
     	* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-    	body {
-        	background: radial-gradient(circle at center, #0a1128 0%, var(--dark) 100%);
-        	color: #d1e8ff;
-        	font-family: 'Rajdhani', sans-serif;
-        	height: 100dvh;
-        	display: flex;
-        	flex-direction: column;
-        	align-items: center;
-        	justify-content: space-between;
-        	padding: 12px;
-        	overflow: hidden;
-    	}
-    	header {
-        	width: 100%;
-        	max-width: 480px;
-        	display: flex;
-        	justify-content: space-between;
-        	align-items: center;
-        	padding: 8px 14px;
-        	background: var(--glass);
-        	border: 1px solid var(--border);
-        	border-radius: 10px;
-        	margin-top: 105px;
-    	}
-    	.hud-title {
-        	font-family: 'Orbitron', sans-serif;
-        	font-weight: 900;
-        	font-size: 0.95rem;
-        	letter-spacing: 2px;
-        	color: #fff;
-        	text-shadow: 0 0 10px var(--cyan);
-    	}
-    	.hud-badge {
-        	font-family: 'Orbitron', sans-serif;
-        	font-size: 0.65rem;
-        	padding: 3px 6px;
-        	border-radius: 6px;
-        	background: rgba(0, 243, 255, 0.1);
-        	border: 1px solid var(--cyan);
-        	color: var(--cyan);
-        	display: flex;
-        	align-items: center;
-        	gap: 5px;
-    	}
-    	.hud-dot {
-        	width: 6px; height: 6px; border-radius: 50%;
-        	background: var(--cyan);
-        	box-shadow: 0 0 8px var(--cyan);
-        	transition: background 0.3s, box-shadow 0.3s;
-    	}
-    	#mainStage {
-        	flex: 1;
-        	width: 100%;
-        	max-width: 480px;
-        	display: flex;
-        	flex-direction: column;
-        	align-items: center;
-        	justify-content: center;
-        	position: relative;
-    	}
-    	#coreContainer {
-        	position: relative;
-        	width: 180px;
-        	height: 180px;
-        	display: flex;
-        	align-items: center;
-        	justify-content: center;
-    	}
+    	body { background: radial-gradient(circle at center, #0a1128 0%, var(--dark) 100%); color: #d1e8ff; font-family: 'Rajdhani', sans-serif; height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 12px; overflow: hidden; }
+    	header { width: 100%; max-width: 480px; display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: var(--glass); border: 1px solid var(--border); border-radius: 10px; margin-top: 105px; }
+    	.hud-title { font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 0.95rem; letter-spacing: 2px; color: #fff; text-shadow: 0 0 10px var(--cyan); }
+    	.hud-badge { font-family: 'Orbitron', sans-serif; font-size: 0.65rem; padding: 3px 6px; border-radius: 6px; background: rgba(0, 243, 255, 0.1); border: 1px solid var(--cyan); color: var(--cyan); display: flex; align-items: center; gap: 5px; }
+    	.hud-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+    	#mainStage { flex: 1; width: 100%; max-width: 480px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+    	#coreContainer { position: relative; width: 180px; height: 180px; display: flex; align-items: center; justify-content: center; }
     	.ring { position: absolute; border-radius: 50%; pointer-events: none; }
-    	.ring-1 {
-        	width: 170px; height: 170px;
-        	border-top: 2px solid var(--cyan);
-        	border-bottom: 2px solid var(--purple);
-        	animation: spinCW 12s linear infinite;
-    	}
-    	.ring-2 {
-        	width: 140px; height: 140px;
-        	border-left: 2px solid var(--cyan);
-        	animation: spinCCW 8s linear infinite;
-    	}
-    	.quantum-orb {
-        	width: 90px;
-        	height: 90px;
-        	border-radius: 50%;
-        	background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%);
-        	box-shadow: 0 0 35px var(--cyan), inset 0 0 15px #fff;
-        	transition: transform 0.15s ease;
-    	}
-    	.quantum-orb.speaking {
-        	animation: voicePulse 0.9s infinite alternate ease-in-out;
-        	box-shadow: 0 0 60px var(--cyan), 0 0 90px var(--purple);
-    	}
-    	.quantum-orb.listening {
-        	transform: scale(1.15);
-        	box-shadow: 0 0 60px #00ffcc;
-    	}
-    	@keyframes spinCW { 100% { transform: rotate(360deg); } }
-    	@keyframes spinCCW { 100% { transform: rotate(-360deg); } }
-    	@keyframes voicePulse {
-        	from { transform: scale(1); filter: brightness(1); }
-        	to { transform: scale(1.2); filter: brightness(1.3); }
-    	}
-    	#controls {
-        	width: 100%;
-        	max-width: 480px;
-        	background: var(--glass);
-        	padding: 12px 14px;
-        	border-radius: 14px;
-        	border: 1px solid var(--border);
-        	display: flex;
-        	flex-direction: column;
-        	align-items: center;
-        	gap: 12px;
-    	}
-        /* DUAL-LINE UI CSS */
-        #statusLabel {
-            font-size: 0.88rem;
-            font-weight: 600;
-            text-align: center;
-            width: 100%;
-            min-height: 45px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            gap: 3px;
-            line-height: 1.2;
-        }
-        .boss-text { color: #00ffcc; font-size: 0.85rem; font-style: italic; }
-        .maya-text { color: #d1e8ff; font-size: 0.95rem; }
-        
-    	.btn-row { 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; /* FIXED: Centers both buttons */
-            gap: 20px; 
-            width: 100%;
-        }
-    	.round-btn {
-        	width: 65px; height: 65px;
-        	border-radius: 50%;
-        	border: 2px solid #00ffcc;
-        	background: radial-gradient(circle at 35% 35%, #00ffcc, #008877);
-        	color: #030611;
-        	font-size: 1.8rem;
-        	cursor: pointer;
-        	box-shadow: 0 0 20px rgba(0, 255, 204, 0.4);
-        	display: flex; align-items: center; justify-content: center;
-        	transition: all 0.2s ease;
-    	}
-    	.round-btn.active {
-        	background: radial-gradient(circle at 35% 35%, #ff3366, var(--red));
-        	border-color: var(--red);
-    	}
-    	.stop-btn {
-        	width: 50px; height: 50px;
-        	border-radius: 50%;
-        	border: 2px solid var(--red);
-        	background: rgba(255, 0, 85, 0.2);
-        	color: var(--red);
-        	font-size: 1.2rem;
-        	cursor: pointer;
-        	display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 0 15px rgba(255, 0, 85, 0.3);
-        }
-    	#diagnosticHUD {
-        	position: fixed;
-        	top: 6px;
-        	left: 8px;
-        	right: 8px;
-        	max-width: 460px;
-        	margin: 0 auto;
-        	z-index: 9999;
-        	background: rgba(3, 6, 18, 0.96);
-        	border: 1px solid #00f3ff;
-        	box-shadow: 0 0 15px rgba(0, 243, 255, 0.3);
-        	color: #0f0;
-        	font-family: monospace;
-        	font-size: 11px;
-        	padding: 8px 12px;
-        	border-radius: 8px;
-        	line-height: 1.5;
-        	pointer-events: none;
-    	}
+    	.ring-1 { width: 170px; height: 170px; border-top: 2px solid var(--cyan); border-bottom: 2px solid var(--purple); animation: spinCW 12s linear infinite; }
+    	.ring-2 { width: 140px; height: 140px; border-left: 2px solid var(--cyan); animation: spinCCW 8s linear infinite; }
+    	.quantum-orb { width: 90px; height: 90px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffffff, var(--cyan) 45%, var(--purple) 85%); box-shadow: 0 0 35px var(--cyan), inset 0 0 15px #fff; transition: transform 0.15s ease; }
+    	.quantum-orb.speaking { animation: voicePulse 0.9s infinite alternate ease-in-out; box-shadow: 0 0 60px var(--cyan), 0 0 90px var(--purple); }
+    	.quantum-orb.listening { transform: scale(1.15); box-shadow: 0 0 60px #00ffcc; }
+    	@keyframes spinCW { 100% { transform: rotate(360deg); } } @keyframes spinCCW { 100% { transform: rotate(-360deg); } }
+    	@keyframes voicePulse { from { transform: scale(1); filter: brightness(1); } to { transform: scale(1.2); filter: brightness(1.3); } }
+    	#controls { width: 100%; max-width: 480px; background: var(--glass); padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        #statusLabel { font-size: 0.88rem; font-weight: 600; text-align: center; width: 100%; min-height: 45px; display: flex; flex-direction: column; justify-content: center; gap: 3px; line-height: 1.2; }
+        .boss-text { color: #00ffcc; font-size: 0.85rem; font-style: italic; } .maya-text { color: #d1e8ff; font-size: 0.95rem; }
+    	.btn-row { display: flex; align-items: center; justify-content: center; gap: 20px; width: 100%; }
+    	.round-btn { width: 65px; height: 65px; border-radius: 50%; border: 2px solid #00ffcc; background: radial-gradient(circle at 35% 35%, #00ffcc, #008877); color: #030611; font-size: 1.8rem; cursor: pointer; box-shadow: 0 0 20px rgba(0, 255, 204, 0.4); display: flex; align-items: center; justify-content: center; }
+    	.round-btn.active { background: radial-gradient(circle at 35% 35%, #ff3366, var(--red)); border-color: var(--red); }
+    	.stop-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--red); background: rgba(255, 0, 85, 0.2); color: var(--red); font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 15px rgba(255, 0, 85, 0.3); }
+    	#diagnosticHUD { position: fixed; top: 6px; left: 8px; right: 8px; max-width: 460px; margin: 0 auto; z-index: 9999; background: rgba(3, 6, 18, 0.96); border: 1px solid #00f3ff; box-shadow: 0 0 15px rgba(0, 243, 255, 0.3); color: #0f0; font-family: monospace; font-size: 11px; padding: 8px 12px; border-radius: 8px; pointer-events: none; }
     	.hud-row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 2px 0; }
-    	.hud-err { color: #ff0055; font-weight: bold; }
-    	.hud-good { color: #00ffcc; font-weight: bold; }
+    	.hud-err { color: #ff0055; font-weight: bold; } .hud-good { color: #00ffcc; font-weight: bold; } .hud-warn { color: #ffd166; font-weight: bold; }
 	</style>
 </head>
 <body>
 	<div id="diagnosticHUD">
     	<div class="hud-row"><span>AUDIO</span><span id="d_ws" class="hud-err">DISCONNECTED</span></div>
-    	<div class="hud-row"><span>MIC</span><span id="d_mic">OFF</span></div>
-    	<div class="hud-row"><span>VAD</span><span id="d_vad">IDLE</span></div>
-    	<div class="hud-row"><span>PIPE</span><span id="d_delivery">0B</span></div>
+    	<div class="hud-row"><span>RAW MIC</span><span id="d_mic">OFF</span></div>
+    	<div class="hud-row"><span>VAD VOL</span><span id="d_vol">0</span></div>
+    	<div class="hud-row"><span>DATA BYTES</span><span id="d_delivery">0B</span></div>
 	</div>
 
 	<header>
@@ -218,9 +53,7 @@
 
 	<div id="mainStage">
     	<div id="coreContainer">
-        	<div class="ring ring-1"></div>
-        	<div class="ring ring-2"></div>
-        	<div id="orb" class="quantum-orb"></div>
+        	<div class="ring ring-1"></div><div class="ring ring-2"></div><div id="orb" class="quantum-orb"></div>
     	</div>
 	</div>
 
@@ -233,65 +66,37 @@
 	</div>
 
 	<script>
-    	let ws = null;
-    	let isCalling = false;
-    	let isMayaSpeaking = false;
-    	let mediaStream = null;
-    	let mediaRecorder = null;
-    	let recordedChunks = [];
-    	let packetsSent = 0;
-    	
-    	let audioCtx = null;
-    	let analyser = null;
-    	let animFrameId = null;
-    	let isUserSpeaking = false;
-    	let silenceTimer = null;
-    	let dummyOscillator = null; // To keep hardware active
+    	let ws = null, isCalling = false, isMayaSpeaking = false, mediaStream = null, audioCtx = null;
+    	let audioProcessor = null, micSource = null, dummyGain = null;
+    	let audioChunksPCM = [], packetsSent = 0;
+    	let isUserSpeaking = false, silenceTimer = null;
+    	let audioQueue = [], isPlayingQueue = false, activeAudio = null;
+    	let lastBossText = "";
 
-    	let audioQueue = [];
-    	let isPlayingQueue = false;
-    	let activeAudio = null;
+    	const orb = document.getElementById("orb"), statusLabel = document.getElementById("statusLabel");
+    	const d_ws = document.getElementById("d_ws"), d_mic = document.getElementById("d_mic");
+    	const d_vol = document.getElementById("d_vol"), d_delivery = document.getElementById("d_delivery");
 
-    	const orb = document.getElementById("orb");
-    	const statusLabel = document.getElementById("statusLabel");
-    	const d_ws = document.getElementById("d_ws");
-    	const d_mic = document.getElementById("d_mic");
-    	const d_vad = document.getElementById("d_vad");
-    	const d_delivery = document.getElementById("d_delivery");
-
-        let lastBossText = "";
         function setStatus(text, type = "system") {
             if (type === "boss") {
                 lastBossText = text;
                 statusLabel.innerHTML = `<span class="boss-text">${text}</span><span class="maya-text" style="opacity:0.5;">माया सोच रही है...</span>`;
             } else if (type === "maya") {
-                if (lastBossText) {
-                    statusLabel.innerHTML = `<span class="boss-text">${lastBossText}</span><span class="maya-text">${text}</span>`;
-                } else {
-                    statusLabel.innerHTML = `<span class="maya-text">${text}</span>`;
-                }
-            } else {
-                statusLabel.innerHTML = `<span class="maya-text">${text}</span>`;
-            }
+                statusLabel.innerHTML = lastBossText ? `<span class="boss-text">${lastBossText}</span><span class="maya-text">${text}</span>` : `<span class="maya-text">${text}</span>`;
+            } else { statusLabel.innerHTML = `<span class="maya-text">${text}</span>`; }
         }
 
-    	async function toggleCall() {
-        	if (!isCalling) { await startLiveCall(); } 
-            else { stopLiveCall(); }
-    	}
+    	async function toggleCall() { if (!isCalling) { await startLiveCall(); } else { stopLiveCall(); } }
 
     	async function startLiveCall() {
         	try {
-            	packetsSent = 0;
-            	d_ws.className = "hud-warn"; d_ws.innerText = "CONNECTING...";
+            	packetsSent = 0; d_ws.className = "hud-warn"; d_ws.innerText = "CONNECTING...";
             	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             	ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
 
             	ws.onopen = async () => {
-                	isCalling = true;
-                	d_ws.className = "hud-good"; d_ws.innerText = "LIVE (200 OK)";
-                	document.getElementById("callToggle").classList.add("active");
-                	document.getElementById("callToggle").innerText = "🛑";
+                	isCalling = true; d_ws.className = "hud-good"; d_ws.innerText = "LIVE (200 OK)";
+                	document.getElementById("callToggle").classList.add("active"); document.getElementById("callToggle").innerText = "🛑";
                 	setStatus("कनेक्टेड। Boss, मैं सुन रही हूँ...", "system");
                 	await initHardwareAudio();
             	};
@@ -309,88 +114,111 @@
         	} catch (error) { stopLiveCall(); }
     	}
 
-        function startFreshRecording() {
-            if (mediaRecorder && mediaRecorder.state !== "inactive") { try { mediaRecorder.stop(); } catch(e){} }
-            recordedChunks = [];
-            try { mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" }); } 
-            catch (e) { mediaRecorder = new MediaRecorder(mediaStream); }
-            
-            mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
-            mediaRecorder.onstop = () => {
-                if (recordedChunks.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                    const completeBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-                    const blobSize = completeBlob.size;
-                    recordedChunks = [];
-                    if (blobSize > 600) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            ws.send(JSON.stringify({ type: "audio_blob", mime: completeBlob.type, data: reader.result.split(",")[1] }));
-                            packetsSent++;
-                            d_delivery.className = "hud-good"; d_delivery.innerText = `${blobSize}B | SENT: ${packetsSent}`;
-                        };
-                        reader.readAsDataURL(completeBlob);
-                    }
-                }
-            };
-            try { mediaRecorder.start(); } catch(e){}
-        }
-
     	async function initHardwareAudio() {
         	try {
             	mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-            	d_mic.className = "hud-good"; d_mic.innerText = `READY`;
+            	d_mic.className = "hud-good"; d_mic.innerText = `RAW BYPASS ACTIVE`;
 
             	audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             	if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-                // HACK: Silent Oscillator keeps Android Audio Focus alive for the Mic
-                dummyOscillator = audioCtx.createOscillator();
-                let gainNode = audioCtx.createGain();
-                gainNode.gain.value = 0; // Pure silence
-                dummyOscillator.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                dummyOscillator.start();
+                // NUCLEAR OPTION: NO MEDIA RECORDER. RAW PCM EXTRACTION.
+                audioProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+                micSource = audioCtx.createMediaStreamSource(mediaStream);
+                
+                // Connect mic to processor
+                micSource.connect(audioProcessor);
+                
+                // Connect processor to a muted gain node (so you don't hear your own echo)
+                dummyGain = audioCtx.createGain();
+                dummyGain.gain.value = 0;
+                audioProcessor.connect(dummyGain);
+                dummyGain.connect(audioCtx.destination);
 
-            	analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
-            	let micSource = audioCtx.createMediaStreamSource(mediaStream);
-            	micSource.connect(analyser);
+                audioProcessor.onaudioprocess = (e) => {
+                    if (!isCalling) return;
+                    let inputData = e.inputBuffer.getChannelData(0);
+                    
+                    // Manual VAD (Volume Detection)
+                    let sum = 0;
+                    for (let i = 0; i < inputData.length; i++) sum += Math.abs(inputData[i]);
+                    let currentVol = Math.round((sum / inputData.length) * 1000); // Scale up
 
-            	const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            	function monitorVAD() {
-                	if (!isCalling) return;
-                	analyser.getByteFrequencyData(dataArray);
-                	let sum = 0; for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-                	let currentVol = Math.round(sum / dataArray.length);
+                    d_vol.innerText = currentVol;
+                    
+                    if (currentVol > 15) { d_vol.className = "hud-good"; } 
+                    else { d_vol.className = ""; }
 
-                	if (currentVol > 12 && !isMayaSpeaking) {
-                    	if (!isUserSpeaking) {
-                        	isUserSpeaking = true; orb.className = "quantum-orb listening";
-                            startFreshRecording(); 
-                    	}
-                    	clearTimeout(silenceTimer);
-                	} else if (isUserSpeaking) {
-                    	clearTimeout(silenceTimer);
-                    	silenceTimer = setTimeout(() => {
-                        	if (isUserSpeaking) {
-                            	isUserSpeaking = false; orb.className = "quantum-orb";
-                            	if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch(e){} }
-                        	}
-                    	}, 900);
-                	}
-                	d_vad.innerText = isMayaSpeaking ? "SPEAKING" : (isUserSpeaking ? "RECORDING" : "IDLE");
-                	animFrameId = requestAnimationFrame(monitorVAD);
-            	}
-            	monitorVAD();
+                    if (currentVol > 15 && !isMayaSpeaking) {
+                        if (!isUserSpeaking) {
+                            isUserSpeaking = true; orb.className = "quantum-orb listening";
+                            audioChunksPCM = []; // Reset chunks
+                        }
+                        audioChunksPCM.push(new Float32Array(inputData));
+                        clearTimeout(silenceTimer);
+                    } else if (isUserSpeaking) {
+                        audioChunksPCM.push(new Float32Array(inputData)); // Capture tail
+                        clearTimeout(silenceTimer);
+                        silenceTimer = setTimeout(() => {
+                            if (isUserSpeaking) {
+                                isUserSpeaking = false; orb.className = "quantum-orb";
+                                processAndSendWAV(); // Encode manually
+                            }
+                        }, 800);
+                    }
+                };
         	} catch (err) { d_mic.className = "hud-err"; d_mic.innerText = `FAIL`; }
     	}
 
+        // MANUALLY BIND PCM CHUNKS INTO A .WAV FILE
+        function processAndSendWAV() {
+            if (audioChunksPCM.length === 0 || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            // Flatten the chunks
+            let length = 0;
+            for (let i = 0; i < audioChunksPCM.length; i++) length += audioChunksPCM[i].length;
+            let flattened = new Float32Array(length);
+            let offset = 0;
+            for (let i = 0; i < audioChunksPCM.length; i++) {
+                flattened.set(audioChunksPCM[i], offset); offset += audioChunksPCM[i].length;
+            }
+            
+            // Create WAV Header (16-bit PCM)
+            let buffer = new ArrayBuffer(44 + flattened.length * 2);
+            let view = new DataView(buffer);
+            let sampleRate = audioCtx.sampleRate;
+            
+            function writeString(view, offset, string) { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); }
+            
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + flattened.length * 2, true);
+            writeString(view, 8, 'WAVE'); writeString(view, 12, 'fmt '); view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+            writeString(view, 36, 'data'); view.setUint32(40, flattened.length * 2, true);
+            
+            let floatOffset = 44;
+            for (let i = 0; i < flattened.length; i++, floatOffset += 2) {
+                let s = Math.max(-1, Math.min(1, flattened[i]));
+                view.setInt16(floatOffset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            
+            let blob = new Blob([view], { type: 'audio/wav' });
+            
+            if (blob.size < 4000) { d_delivery.className = "hud-warn"; d_delivery.innerText = `REJECTED: ${blob.size}B`; return; }
+
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                ws.send(JSON.stringify({ type: "audio_blob", mime: "audio/wav", data: reader.result.split(",")[1] }));
+                packetsSent++; d_delivery.className = "hud-good"; d_delivery.innerText = `SENT WAV: ${blob.size}B`;
+            };
+            reader.readAsDataURL(blob);
+        }
+
     	function enqueueAudioChunk(base64Data) { audioQueue.push(base64Data); if (!isPlayingQueue) playNextInQueue(); }
     	function playNextInQueue() {
-        	if (!audioQueue.length) {
-            	isPlayingQueue = false; isMayaSpeaking = false; orb.className = "quantum-orb"; activeAudio = null; return;
-        	}
+        	if (!audioQueue.length) { isPlayingQueue = false; isMayaSpeaking = false; orb.className = "quantum-orb"; activeAudio = null; return; }
         	isPlayingQueue = true; isMayaSpeaking = true; orb.className = "quantum-orb speaking";
-        	if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (_) {} }
         	isUserSpeaking = false;
         	activeAudio = new Audio("data:audio/mp3;base64," + audioQueue.shift());
         	activeAudio.onended = () => { playNextInQueue(); };
@@ -406,13 +234,12 @@
 
     	function stopLiveCall() {
         	interruptPlayback(); isCalling = false;
-        	document.getElementById("callToggle").classList.remove("active");
-        	document.getElementById("callToggle").innerText = "📞";
-        	setStatus("कॉल समाप्त // बात करने के लिए टैप करें");
-        	orb.className = "quantum-orb";
-            if (dummyOscillator) { try { dummyOscillator.stop(); } catch(e){} }
-        	if (animFrameId) cancelAnimationFrame(animFrameId);
-        	if (mediaRecorder && mediaRecorder.state !== "inactive") { try { mediaRecorder.stop(); } catch (_) {} }
+        	document.getElementById("callToggle").classList.remove("active"); document.getElementById("callToggle").innerText = "📞";
+        	setStatus("कॉल समाप्त // बात करने के लिए टैप करें"); orb.className = "quantum-orb";
+            
+            if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
+            if (micSource) { micSource.disconnect(); micSource = null; }
+            if (dummyGain) { dummyGain.disconnect(); dummyGain = null; }
         	if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
         	if (ws && ws.readyState === WebSocket.OPEN) ws.close(); ws = null;
     	}
