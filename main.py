@@ -437,9 +437,8 @@ async def websocket_live_call(ws: WebSocket):
     CURRENT_ACTIVE_WS = ws
 
     try:
-        welcome_text = "नमस्ते Boss! मैं ऑनलाइन हूँ, कहिए क्या हुक्म है?"
-        await safe_send_json(ws, {"type": "reply_text", "text": welcome_text})
-        asyncio.create_task(stream_neural_speech(ws, welcome_text))
+        # Silent Start: No welcome audio to prevent Android Mic Muting
+        await safe_send_json(ws, {"type": "system", "text": "लाइव कनेक्शन तैयार। Boss, मैं सुन रही हूँ..."})
     except Exception as ge:
         print(f"[WELCOME ERROR] {ge}")
 
