@@ -6,10 +6,7 @@
 	<title>MAYA // SOVEREIGN OS</title>
 	<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
 	<style>
-    	:root {
-        	--cyan: #00f3ff; --purple: #9d4edd; --red: #ff0055;
-        	--dark: #030612; --glass: rgba(6, 12, 28, 0.90); --border: rgba(0, 243, 255, 0.25);
-    	}
+    	:root { --cyan: #00f3ff; --purple: #9d4edd; --red: #ff0055; --dark: #030612; --glass: rgba(6, 12, 28, 0.90); --border: rgba(0, 243, 255, 0.25); }
     	* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     	body { background: radial-gradient(circle at center, #0a1128 0%, var(--dark) 100%); color: #d1e8ff; font-family: 'Rajdhani', sans-serif; height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 12px; overflow: hidden; }
     	header { width: 100%; max-width: 480px; display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: var(--glass); border: 1px solid var(--border); border-radius: 10px; margin-top: 105px; }
@@ -42,7 +39,7 @@
 	<div id="diagnosticHUD">
     	<div class="hud-row"><span>AUDIO</span><span id="d_ws" class="hud-err">DISCONNECTED</span></div>
     	<div class="hud-row"><span>RAW MIC</span><span id="d_mic">OFF</span></div>
-    	<div class="hud-row"><span>VAD VOL</span><span id="d_vol">0</span></div>
+    	<div class="hud-row"><span>VAD (30x BOOST)</span><span id="d_vol">0</span></div>
     	<div class="hud-row"><span>DATA BYTES</span><span id="d_delivery">0B</span></div>
 	</div>
 
@@ -67,7 +64,7 @@
 
 	<script>
     	let ws = null, isCalling = false, isMayaSpeaking = false, mediaStream = null, audioCtx = null;
-    	let audioProcessor = null, micSource = null, dummyGain = null;
+    	let audioProcessor = null, micSource = null, powerBooster = null, outGain = null, dummyOscillator = null, dummyGain = null;
     	let audioChunksPCM = [], packetsSent = 0;
     	let isUserSpeaking = false, silenceTimer = null;
     	let audioQueue = [], isPlayingQueue = false, activeAudio = null;
@@ -116,53 +113,72 @@
 
     	async function initHardwareAudio() {
         	try {
-            	mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-            	d_mic.className = "hud-good"; d_mic.innerText = `RAW BYPASS ACTIVE`;
+                // हैकर फिक्स 1: ब्राउज़र के सभी फिल्टर्स (suppression) बंद कर दिए
+            	mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { 
+                        echoCancellation: false, 
+                        noiseSuppression: false, 
+                        autoGainControl: false 
+                    } 
+                });
+            	d_mic.className = "hud-good"; d_mic.innerText = `RAW + 30X BOOST`;
 
             	audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             	if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-                // NUCLEAR OPTION: NO MEDIA RECORDER. RAW PCM EXTRACTION.
+                // Dummy oscillator to keep Android audio awake
+                dummyOscillator = audioCtx.createOscillator();
+                dummyGain = audioCtx.createGain();
+                dummyGain.gain.value = 0;
+                dummyOscillator.connect(dummyGain);
+                dummyGain.connect(audioCtx.destination);
+                dummyOscillator.start();
+
                 audioProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
                 micSource = audioCtx.createMediaStreamSource(mediaStream);
                 
-                // Connect mic to processor
-                micSource.connect(audioProcessor);
+                // 🔥 हैकर फिक्स 2: 30 गुना पावर बूस्टर 🔥
+                powerBooster = audioCtx.createGain();
+                powerBooster.gain.value = 30.0; // 30 GUNA POWER!
+
+                // पाइपलाइन: Mic -> 30x Booster -> Processor
+                micSource.connect(powerBooster);
+                powerBooster.connect(audioProcessor);
                 
-                // Connect processor to a muted gain node (so you don't hear your own echo)
-                dummyGain = audioCtx.createGain();
-                dummyGain.gain.value = 0;
-                audioProcessor.connect(dummyGain);
-                dummyGain.connect(audioCtx.destination);
+                // Mute processor output so it doesn't echo
+                outGain = audioCtx.createGain();
+                outGain.gain.value = 0;
+                audioProcessor.connect(outGain);
+                outGain.connect(audioCtx.destination);
 
                 audioProcessor.onaudioprocess = (e) => {
                     if (!isCalling) return;
                     let inputData = e.inputBuffer.getChannelData(0);
                     
-                    // Manual VAD (Volume Detection)
                     let sum = 0;
                     for (let i = 0; i < inputData.length; i++) sum += Math.abs(inputData[i]);
-                    let currentVol = Math.round((sum / inputData.length) * 1000); // Scale up
+                    let currentVol = Math.round((sum / inputData.length) * 1000); 
 
                     d_vol.innerText = currentVol;
                     
                     if (currentVol > 15) { d_vol.className = "hud-good"; } 
                     else { d_vol.className = ""; }
 
+                    // अब अगर 30 गुना पावर के बाद भी 15 पार करता है, तो रिकॉर्ड करेगा
                     if (currentVol > 15 && !isMayaSpeaking) {
                         if (!isUserSpeaking) {
                             isUserSpeaking = true; orb.className = "quantum-orb listening";
-                            audioChunksPCM = []; // Reset chunks
+                            audioChunksPCM = [];
                         }
                         audioChunksPCM.push(new Float32Array(inputData));
                         clearTimeout(silenceTimer);
                     } else if (isUserSpeaking) {
-                        audioChunksPCM.push(new Float32Array(inputData)); // Capture tail
+                        audioChunksPCM.push(new Float32Array(inputData));
                         clearTimeout(silenceTimer);
                         silenceTimer = setTimeout(() => {
                             if (isUserSpeaking) {
                                 isUserSpeaking = false; orb.className = "quantum-orb";
-                                processAndSendWAV(); // Encode manually
+                                processAndSendWAV();
                             }
                         }, 800);
                     }
@@ -170,11 +186,9 @@
         	} catch (err) { d_mic.className = "hud-err"; d_mic.innerText = `FAIL`; }
     	}
 
-        // MANUALLY BIND PCM CHUNKS INTO A .WAV FILE
         function processAndSendWAV() {
             if (audioChunksPCM.length === 0 || !ws || ws.readyState !== WebSocket.OPEN) return;
             
-            // Flatten the chunks
             let length = 0;
             for (let i = 0; i < audioChunksPCM.length; i++) length += audioChunksPCM[i].length;
             let flattened = new Float32Array(length);
@@ -183,7 +197,6 @@
                 flattened.set(audioChunksPCM[i], offset); offset += audioChunksPCM[i].length;
             }
             
-            // Create WAV Header (16-bit PCM)
             let buffer = new ArrayBuffer(44 + flattened.length * 2);
             let view = new DataView(buffer);
             let sampleRate = audioCtx.sampleRate;
@@ -238,7 +251,10 @@
         	setStatus("कॉल समाप्त // बात करने के लिए टैप करें"); orb.className = "quantum-orb";
             
             if (audioProcessor) { audioProcessor.disconnect(); audioProcessor = null; }
+            if (powerBooster) { powerBooster.disconnect(); powerBooster = null; }
             if (micSource) { micSource.disconnect(); micSource = null; }
+            if (outGain) { outGain.disconnect(); outGain = null; }
+            if (dummyOscillator) { try { dummyOscillator.stop(); } catch(e){} }
             if (dummyGain) { dummyGain.disconnect(); dummyGain = null; }
         	if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
         	if (ws && ws.readyState === WebSocket.OPEN) ws.close(); ws = null;
